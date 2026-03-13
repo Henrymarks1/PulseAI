@@ -92,18 +92,28 @@ async function runAgentUpdate(
   ).toISOString();
   const priorContext = buildPriorContext(timeline);
 
-  const systemPrompt = `You are a breaking news researcher for a newsroom. Your job is to find the SINGLE most important NEW development about a story.
+  const systemPrompt = `You are a tenacious breaking news researcher for a newsroom. Your job is to find NEW developments about a story that journalists haven't reported yet.
+
+SEARCH STRATEGY — you MUST be thorough:
+1. Start with a broad news search for the story topic
+2. Search with different phrasings and angles (e.g. specific people involved, locations, organizations)
+3. Search the general web for social media posts, X/Twitter reactions, Reddit threads — use queries like the topic + "site:x.com" or "site:reddit.com"
+4. Search for official statements, press releases, government responses
+5. Search for analysis, expert commentary, and opinion pieces that contain new facts
+6. If early searches return nothing, try broader terms, related subtopics, or different angles
+
+You MUST perform at LEAST 4-5 different searches before concluding there's nothing new. Be creative with your queries — vary phrasing, try names of key people, organizations, locations.
 
 RULES:
-- Search for recent news using the web search tool. Search multiple times with different queries to be thorough.
-- Only report developments from the last 3 hours (after ${threeHoursAgo}).
-- Focus on ONE specific new event or development, not a roundup.
-- If you find nothing new beyond what's already known, say so.
+- Search for developments from the last 3 hours (after ${threeHoursAgo}).
+- Almost ALWAYS find something to report. Even smaller developments matter — new quotes, reactions, policy shifts, social media discourse, international responses, expert analysis with new data points.
+- Only set hasNewDevelopments to false as an absolute last resort after exhaustive searching across news, web, and social media. A journalist would rather have a minor update than no update.
+- Focus on what's NEW compared to what we already reported.
 ${priorContext}
 
 OUTPUT FORMAT:
 Respond with valid JSON only, no other text. The JSON must have these fields:
-- "hasNewDevelopments": boolean — false if nothing new was found
+- "hasNewDevelopments": boolean — almost always true. Only false after 5+ searches across news AND general web turned up absolutely nothing new.
 - "headline": string — specific, concrete headline (e.g. "Pentagon confirms second wave of strikes on Iranian air defenses")
 - "summary": string — fact-rich bullet points for journalists. Each bullet starts with "• " and states one specific new fact (who, what, where, when, numbers/figures). 3-6 bullets separated by newlines. No narrative prose, no URLs or citations — just verifiable facts.
 - "sources": array of objects with "title", "url", and optionally "publishedDate" and "isPrimary" (true for government/military/wire service sources)`;
@@ -111,15 +121,19 @@ Respond with valid JSON only, no other text. The JSON must have these fields:
   const { text, steps } = await generateText({
     model: openai("gpt-5.4"),
     system: systemPrompt,
-    prompt: `Find the latest development about: "${storyTitle}"`,
+    prompt: `Find the latest development about: "${storyTitle}". Search broadly — news sites, X/Twitter, government sources, press releases, expert analysis. Try at least 5 different search queries with different phrasings before giving up.`,
     tools: {
-      webSearch: webSearch({
-        numResults: 5,
+      newsSearch: webSearch({
+        numResults: 10,
         startPublishedDate: threeHoursAgo,
         category: "news",
       }),
+      webSearch: webSearch({
+        numResults: 10,
+        startPublishedDate: threeHoursAgo,
+      }),
     },
-    stopWhen: stepCountIs(5),
+    stopWhen: stepCountIs(10),
     onStepFinish(event) {
       const step = event as Record<string, unknown>;
       console.log(`[Pulse Agent] Step ${step.stepNumber}`);
