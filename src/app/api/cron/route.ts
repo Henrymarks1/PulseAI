@@ -210,7 +210,8 @@ export async function GET(req: NextRequest) {
   for (const story of due) {
     try {
       const result = await updateStory(story.id, story.title);
-      await upsertStory({ ...story, lastUpdated: new Date().toISOString() });
+      const timeline = await getTimeline(story.id);
+      await upsertStory({ ...story, lastUpdated: new Date().toISOString(), description: `${timeline.length} updates` });
       results.push(result);
     } catch (err) {
       console.error(`Failed to update story ${story.id}:`, err);
