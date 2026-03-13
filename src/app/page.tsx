@@ -8,36 +8,33 @@ export default function Home() {
   const [stories, setStories] = useState<TrackedStory[]>([]);
   const [input, setInput] = useState("");
 
-  useEffect(() => {
-    const saved = localStorage.getItem("pulse-stories");
-    if (saved) setStories(JSON.parse(saved));
-  }, []);
-
-  const saveStories = (updated: TrackedStory[]) => {
-    setStories(updated);
-    localStorage.setItem("pulse-stories", JSON.stringify(updated));
+  const fetchStories = async () => {
+    const res = await fetch("/api/stories");
+    const data = await res.json();
+    setStories(data.stories || []);
   };
 
-  const addStory = (e: React.FormEvent) => {
+  useEffect(() => {
+    fetchStories();
+  }, []);
+
+  const addStory = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim()) return;
 
-    const story: TrackedStory = {
-      id: Date.now().toString(36),
-      title: input.trim(),
-      description: "Tracking this story...",
-      createdAt: new Date().toISOString(),
-      lastUpdated: new Date().toISOString(),
-      refreshInterval: 30,
-    };
+    await fetch("/api/stories", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: input.trim() }),
+    });
 
-    saveStories([story, ...stories]);
     setInput("");
+    fetchStories();
   };
 
-  const removeStory = (id: string) => {
-    saveStories(stories.filter((s) => s.id !== id));
-    localStorage.removeItem(`pulse-results-${id}`);
+  const removeStory = async (id: string) => {
+    await fetch(`/api/stories?id=${id}`, { method: "DELETE" });
+    fetchStories();
   };
 
   return (

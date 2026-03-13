@@ -53,34 +53,26 @@ export default function StoryDashboard() {
   const [refreshInterval, setRefreshInterval] = useState(30);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Load story + timeline from localStorage
-  useEffect(() => {
-    const saved = localStorage.getItem("pulse-stories");
-    if (!saved) return;
-    const stories: TrackedStory[] = JSON.parse(saved);
-    const found = stories.find((s) => s.id === id);
-    if (found) {
-      setStory(found);
-      setRefreshInterval(found.refreshInterval);
-    }
-
-    const cachedTimeline = localStorage.getItem(`pulse-timeline-${id}`);
-    if (cachedTimeline) {
-      const entries: TimelineEntry[] = JSON.parse(cachedTimeline);
-      setTimeline(entries);
-      // Rebuild known URLs from all past entries
-      const urls = new Set<string>();
-      entries.forEach((e) => e.newSources.forEach((s) => urls.add(s.url)));
-      setKnownUrls(urls);
-    }
+  // Load story + timeline from server
+  const loadData = useCallback(async () => {
+    const res = await fetch(`/api/stories?id=${id}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    setStory(data.story);
+    setTimeline(data.timeline || []);
+    setRefreshInterval(data.story.refreshInterval);
+    setKnownUrls(new Set(data.knownUrls || []));
   }, [id]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const checkForUpdates = useCallback(async () => {
     if (!story) return;
     setLoading(true);
 
     try {
-      // Use the most recent timeline entry's timestamp to only find new articles
       const lastTimestamp =
         timeline.length > 0 ? timeline[0].timestamp : undefined;
 
@@ -101,12 +93,9 @@ export default function StoryDashboard() {
       }
 
       const allResults: SearchResult[] = searchData.results || [];
-
-      // Find sources we haven't seen before
       const newSources = allResults.filter((r) => !knownUrls.has(r.url));
 
       if (newSources.length === 0 && timeline.length > 0) {
-        // No new sources — add a brief "no updates" entry
         const entry: TimelineEntry = {
           id: Date.now().toString(36),
           timestamp: new Date().toISOString(),
@@ -114,15 +103,18 @@ export default function StoryDashboard() {
           newSources: [],
           totalSourceCount: knownUrls.size,
         };
-        const updated = [entry, ...timeline];
-        setTimeline(updated);
-        localStorage.setItem(`pulse-timeline-${id}`, JSON.stringify(updated));
+        // Save to server
+        await fetch("/api/stories/timeline", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ storyId: id, entry }),
+        });
+        await loadData();
         setLoading(false);
         return;
       }
 
-      // Get AI summary focused on what's new
-      let summary = "";
+      // Get AI summary
       const sumRes = await fetch("/api/summarize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -132,50 +124,42 @@ export default function StoryDashboard() {
         }),
       });
       const sumData = await sumRes.json();
-      summary = sumData.summary || "";
 
-      // Update known URLs
-      const updatedUrls = new Set(knownUrls);
-      allResults.forEach((r) => updatedUrls.add(r.url));
-      setKnownUrls(updatedUrls);
+      const updatedKnownCount = knownUrls.size + newSources.length;
 
-      // Create timeline entry
       const entry: TimelineEntry = {
         id: Date.now().toString(36),
         timestamp: new Date().toISOString(),
-        summary,
+        summary: sumData.summary || "",
         newSources,
-        totalSourceCount: updatedUrls.size,
+        totalSourceCount: updatedKnownCount,
       };
 
-      const updatedTimeline = [entry, ...timeline];
-      setTimeline(updatedTimeline);
-      localStorage.setItem(
-        `pulse-timeline-${id}`,
-        JSON.stringify(updatedTimeline)
-      );
+      // Save to server
+      await fetch("/api/stories/timeline", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ storyId: id, entry }),
+      });
 
       // Update story metadata
-      const saved = localStorage.getItem("pulse-stories");
-      if (saved) {
-        const stories: TrackedStory[] = JSON.parse(saved);
-        const updatedStories = stories.map((s) =>
-          s.id === id
-            ? {
-                ...s,
-                lastUpdated: new Date().toISOString(),
-                description: `${updatedUrls.size} sources · ${updatedTimeline.length} updates`,
-              }
-            : s
-        );
-        localStorage.setItem("pulse-stories", JSON.stringify(updatedStories));
-      }
+      await fetch("/api/stories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...story,
+          lastUpdated: new Date().toISOString(),
+          description: `${updatedKnownCount} sources · ${timeline.length + 1} updates`,
+        }),
+      });
+
+      await loadData();
     } catch (err) {
       console.error("Fetch error:", err);
     } finally {
       setLoading(false);
     }
-  }, [story, timeline, knownUrls, id]);
+  }, [story, timeline, knownUrls, id, loadData]);
 
   // Initial fetch if no timeline yet
   useEffect(() => {
@@ -185,7 +169,7 @@ export default function StoryDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [story]);
 
-  // Auto-refresh interval
+  // Auto-refresh interval (still runs client-side when tab is open)
   useEffect(() => {
     if (intervalRef.current) clearInterval(intervalRef.current);
     if (story && refreshInterval > 0) {
@@ -199,25 +183,21 @@ export default function StoryDashboard() {
     };
   }, [refreshInterval, story, checkForUpdates]);
 
-  const handleIntervalChange = (mins: number) => {
+  const handleIntervalChange = async (mins: number) => {
     setRefreshInterval(mins);
-    const saved = localStorage.getItem("pulse-stories");
-    if (saved) {
-      const stories: TrackedStory[] = JSON.parse(saved);
-      const updated = stories.map((s) =>
-        s.id === id ? { ...s, refreshInterval: mins } : s
-      );
-      localStorage.setItem("pulse-stories", JSON.stringify(updated));
+    if (story) {
+      await fetch("/api/stories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...story, refreshInterval: mins }),
+      });
     }
   };
 
   if (!story) {
     return (
       <div className="max-w-3xl mx-auto px-4 py-12 text-center text-pulse-gray">
-        <p>Story not found.</p>
-        <Link href="/" className="text-pulse-blue hover:underline mt-4 block">
-          Back to Pulse
-        </Link>
+        <p>Loading...</p>
       </div>
     );
   }
