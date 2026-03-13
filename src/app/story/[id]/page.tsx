@@ -67,10 +67,6 @@ export default function StoryDashboard() {
   const [story, setStory] = useState<TrackedStory | null>(null);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [loading, setLoading] = useState(false);
-  const [refreshInterval, setRefreshInterval] = useState(30);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const hasFetchedInitial = useRef(false);
-  const loadingRef = useRef(false);
 
   const loadData = useCallback(async () => {
     const res = await fetch(`/api/stories?id=${id}`);
@@ -78,7 +74,6 @@ export default function StoryDashboard() {
     const data = await res.json();
     setStory(data.story);
     setTimeline(data.timeline || []);
-    setRefreshInterval(data.story.refreshInterval);
   }, [id]);
 
   useEffect(() => {
@@ -86,22 +81,20 @@ export default function StoryDashboard() {
   }, [loadData]);
 
   const checkForUpdates = useCallback(async () => {
-    if (!story || loadingRef.current) return;
-    loadingRef.current = true;
+    if (!story) return;
     setLoading(true);
-
     try {
       await fetch(`/api/stories/${id}/update`, { method: "POST" });
       await loadData();
     } catch (err) {
       console.error("Fetch error:", err);
     } finally {
-      loadingRef.current = false;
       setLoading(false);
     }
   }, [story, id, loadData]);
 
-  // Initial fetch — runs exactly once
+  // Auto-fetch initial summary when story has no timeline yet
+  const hasFetchedInitial = useRef(false);
   useEffect(() => {
     if (story && timeline.length === 0 && !hasFetchedInitial.current) {
       hasFetchedInitial.current = true;
@@ -110,30 +103,6 @@ export default function StoryDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [story]);
 
-  // Auto-refresh when tab is open
-  useEffect(() => {
-    if (intervalRef.current) clearInterval(intervalRef.current);
-    if (story && refreshInterval > 0) {
-      intervalRef.current = setInterval(
-        () => checkForUpdates(),
-        refreshInterval * 60 * 1000
-      );
-    }
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [refreshInterval, story, checkForUpdates]);
-
-  const handleIntervalChange = async (mins: number) => {
-    setRefreshInterval(mins);
-    if (story) {
-      await fetch("/api/stories", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...story, refreshInterval: mins }),
-      });
-    }
-  };
 
   if (!story) {
     return (
@@ -185,20 +154,9 @@ export default function StoryDashboard() {
               {timeline.length} updates
             </p>
           </div>
-          <div className="shrink-0">
-            <label className="text-xs text-pulse-gray block mb-1">
-              Auto-refresh
-            </label>
-            <select
-              value={refreshInterval}
-              onChange={(e) => handleIntervalChange(Number(e.target.value))}
-              className="text-sm border border-pulse-border rounded px-2 py-1 bg-white"
-            >
-              <option value={15}>Every 15 min</option>
-              <option value={30}>Every 30 min</option>
-              <option value={60}>Every 1 hour</option>
-            </select>
-          </div>
+          <span className="text-xs text-pulse-gray shrink-0 mt-2">
+            Auto-refreshes every 30 min
+          </span>
         </div>
       </header>
 

@@ -28,11 +28,12 @@ export default function Home() {
     setAdding(true);
 
     try {
-      await fetch("/api/stories", {
+      const res = await fetch("/api/stories", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: input.trim() }),
       });
+      const { story } = await res.json();
 
       setInput("");
       await fetchStories();
