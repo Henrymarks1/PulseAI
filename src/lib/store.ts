@@ -73,6 +73,6 @@ export function addTimelineEntry(storyId: string, entry: TimelineEntry) {
 export function getKnownUrls(storyId: string): Set<string> {
   const entries = getTimeline(storyId);
   const urls = new Set<string>();
-  entries.forEach((e) => e.newSources.forEach((s) => urls.add(s.url)));
+  entries.forEach((e) => e.sources.forEach((s) => urls.add(s.url)));
   return urls;
 }

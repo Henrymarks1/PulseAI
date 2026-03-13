@@ -7,19 +7,23 @@ export interface TrackedStory {
   refreshInterval: number; // minutes
 }
 
-export interface SearchResult {
+export interface Source {
   title: string;
   url: string;
-  publishedDate: string | null;
-  author: string | null;
-  text: string;
+  publishedDate?: string;
   isPrimary?: boolean;
+}
+
+export interface ResearchUpdate {
+  headline: string;
+  summary: string;
+  sources: Source[];
 }
 
 export interface TimelineEntry {
   id: string;
   timestamp: string;
+  headline: string;
   summary: string;
-  newSources: SearchResult[];
-  totalSourceCount: number;
+  sources: Source[];
 }

@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { TrackedStory, SearchResult, TimelineEntry } from "@/lib/types";
+import { TrackedStory, TimelineEntry } from "@/lib/types";
 
 function extractDomain(url: string): string {
   try {
@@ -42,18 +42,34 @@ function formatDateTime(dateStr: string): string {
   });
 }
 
+// Strip inline citations that the research agent sometimes embeds
+function cleanSummary(text: string): string {
+  return text
+    // [Source](url) markdown links
+    .replace(/\[([^\]]*)\]\(https?:\/\/[^)]+\)/g, "$1")
+    // [Source] (url) with space
+    .replace(/\[([^\]]*)\]\s*\(https?:\/\/[^)]+\)/g, "$1")
+    // Bare [Source](url) where source is a name
+    .replace(/\[([A-Z][^\]]*)\]/g, "$1")
+    // Remaining bare URLs in parentheses
+    .replace(/\(https?:\/\/[^)]+\)/g, "")
+    // Bare URLs left in text
+    .replace(/https?:\/\/\S+/g, "")
+    // Clean up double spaces and trailing punctuation issues
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 export default function StoryDashboard() {
   const params = useParams();
   const id = params.id as string;
 
   const [story, setStory] = useState<TrackedStory | null>(null);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
-  const [knownUrls, setKnownUrls] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(30);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Load story + timeline from server
   const loadData = useCallback(async () => {
     const res = await fetch(`/api/stories?id=${id}`);
     if (!res.ok) return;
@@ -61,7 +77,6 @@ export default function StoryDashboard() {
     setStory(data.story);
     setTimeline(data.timeline || []);
     setRefreshInterval(data.story.refreshInterval);
-    setKnownUrls(new Set(data.knownUrls || []));
   }, [id]);
 
   useEffect(() => {
@@ -73,93 +88,15 @@ export default function StoryDashboard() {
     setLoading(true);
 
     try {
-      const lastTimestamp =
-        timeline.length > 0 ? timeline[0].timestamp : undefined;
-
-      const searchRes = await fetch("/api/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query: story.title,
-          numResults: 15,
-          startPublishedDate: lastTimestamp,
-        }),
-      });
-      const searchData = await searchRes.json();
-      if (searchData.error) {
-        console.error("Search error:", searchData.error);
-        setLoading(false);
-        return;
-      }
-
-      const allResults: SearchResult[] = searchData.results || [];
-      const newSources = allResults.filter((r) => !knownUrls.has(r.url));
-
-      if (newSources.length === 0 && timeline.length > 0) {
-        const entry: TimelineEntry = {
-          id: Date.now().toString(36),
-          timestamp: new Date().toISOString(),
-          summary: "No new developments found since the last check.",
-          newSources: [],
-          totalSourceCount: knownUrls.size,
-        };
-        // Save to server
-        await fetch("/api/stories/timeline", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ storyId: id, entry }),
-        });
-        await loadData();
-        setLoading(false);
-        return;
-      }
-
-      // Get AI summary
-      const sumRes = await fetch("/api/summarize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          storyTitle: story.title,
-          articles: newSources.length > 0 ? newSources : allResults,
-        }),
-      });
-      const sumData = await sumRes.json();
-
-      const updatedKnownCount = knownUrls.size + newSources.length;
-
-      const entry: TimelineEntry = {
-        id: Date.now().toString(36),
-        timestamp: new Date().toISOString(),
-        summary: sumData.summary || "",
-        newSources,
-        totalSourceCount: updatedKnownCount,
-      };
-
-      // Save to server
-      await fetch("/api/stories/timeline", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ storyId: id, entry }),
-      });
-
-      // Update story metadata
-      await fetch("/api/stories", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...story,
-          lastUpdated: new Date().toISOString(),
-          description: `${updatedKnownCount} sources · ${timeline.length + 1} updates`,
-        }),
-      });
-
+      // Fire-and-forget to server — runs to completion even if we navigate away
+      await fetch(`/api/stories/${id}/update`, { method: "POST" });
       await loadData();
     } catch (err) {
       console.error("Fetch error:", err);
     } finally {
       setLoading(false);
     }
-  }, [story, timeline, knownUrls, id, loadData]);
+  }, [story, id, loadData]);
 
   // Initial fetch if no timeline yet
   useEffect(() => {
@@ -169,7 +106,7 @@ export default function StoryDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [story]);
 
-  // Auto-refresh interval (still runs client-side when tab is open)
+  // Auto-refresh when tab is open
   useEffect(() => {
     if (intervalRef.current) clearInterval(intervalRef.current);
     if (story && refreshInterval > 0) {
@@ -217,7 +154,7 @@ export default function StoryDashboard() {
             <h1 className="text-4xl font-bold tracking-tight">{story.title}</h1>
             <p className="text-sm text-pulse-gray mt-1">
               Tracking since {formatDateTime(story.createdAt)} &middot;{" "}
-              {knownUrls.size} total sources
+              {timeline.length} updates
             </p>
           </div>
           <div className="shrink-0">
@@ -244,8 +181,13 @@ export default function StoryDashboard() {
           disabled={loading}
           className="px-5 py-2.5 bg-pulse-black text-white rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {loading ? "Checking..." : "Check for Updates"}
+          {loading ? "Researching..." : "Check for Updates"}
         </button>
+        {loading && (
+          <span className="ml-3 text-sm text-pulse-gray">
+            AI researcher is searching for new developments...
+          </span>
+        )}
       </div>
 
       {/* Timeline */}
@@ -258,12 +200,11 @@ export default function StoryDashboard() {
 
         {loading && timeline.length === 0 && (
           <div className="py-8 text-center text-pulse-gray text-sm">
-            Searching for initial coverage...
+            AI researcher is finding initial coverage...
           </div>
         )}
 
         <div className="relative">
-          {/* Vertical timeline line */}
           {timeline.length > 0 && (
             <div className="absolute left-[7px] top-2 bottom-0 w-px bg-pulse-border" />
           )}
@@ -273,7 +214,7 @@ export default function StoryDashboard() {
               {/* Timeline dot */}
               <div
                 className={`absolute left-0 top-1.5 w-[15px] h-[15px] rounded-full border-2 ${
-                  entry.newSources.length > 0
+                  entry.sources.length > 0
                     ? "bg-pulse-accent border-pulse-accent"
                     : "bg-white border-pulse-border"
                 }`}
@@ -287,17 +228,19 @@ export default function StoryDashboard() {
                 <span className="text-xs text-pulse-gray">
                   {formatTime(entry.timestamp)}
                 </span>
-                {entry.newSources.length > 0 && (
-                  <span className="text-xs font-medium text-pulse-blue">
-                    {entry.newSources.length} new source
-                    {entry.newSources.length > 1 ? "s" : ""}
-                  </span>
-                )}
               </div>
 
-              {/* AI Summary — rendered as multi-paragraph dispatch */}
-              <div className="bg-white border border-pulse-border rounded-lg p-5 mb-4">
-                {entry.summary.split("\n\n").map((para, pi) => (
+              {/* Headline */}
+              <h3
+                className="text-2xl font-bold leading-tight mb-3"
+                style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}
+              >
+                {entry.headline}
+              </h3>
+
+              {/* Summary — multi-paragraph dispatch */}
+              <div className="mb-4">
+                {cleanSummary(entry.summary).split("\n\n").map((para, pi) => (
                   <p
                     key={pi}
                     className="text-lg leading-relaxed text-pulse-black mb-3 last:mb-0"
@@ -308,22 +251,25 @@ export default function StoryDashboard() {
                 ))}
               </div>
 
-              {/* New sources found in this update */}
-              {entry.newSources.length > 0 && (
-                <div className="space-y-3 ml-1">
-                  {entry.newSources.map((source, i) => (
+              {/* Sources */}
+              {entry.sources.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-pulse-gray uppercase tracking-wider">
+                    Sources
+                  </p>
+                  {entry.sources.map((source, i) => (
                     <div
                       key={`${source.url}-${i}`}
-                      className={`border-l-2 pl-4 py-1 ${
+                      className={`border-l-2 pl-3 py-0.5 ${
                         source.isPrimary
                           ? "border-pulse-accent"
                           : "border-pulse-border"
                       }`}
                     >
-                      <div className="flex items-center gap-2 mb-1">
+                      <div className="flex items-center gap-2">
                         {source.isPrimary && (
                           <span className="text-[10px] font-bold uppercase tracking-wider bg-pulse-accent text-white px-1.5 py-0.5 rounded">
-                            Primary Source
+                            Primary
                           </span>
                         )}
                         <span className="text-xs font-medium text-pulse-blue uppercase tracking-wide">
@@ -335,29 +281,13 @@ export default function StoryDashboard() {
                           </span>
                         )}
                       </div>
-                      <h4 className="text-base font-semibold leading-snug">
-                        <a
-                          href={source.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="hover:text-pulse-blue transition-colors"
-                        >
-                          {source.title}
-                        </a>
-                      </h4>
-                      {source.text && (
-                        <p className="text-sm text-pulse-gray leading-relaxed mt-1">
-                          {source.text.slice(0, 200)}
-                          {source.text.length > 200 ? "..." : ""}
-                        </p>
-                      )}
                       <a
                         href={source.url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-xs text-pulse-gray hover:text-pulse-blue mt-1 inline-block break-all"
+                        className="text-sm font-medium hover:text-pulse-blue transition-colors"
                       >
-                        {source.url}
+                        {source.title}
                       </a>
                     </div>
                   ))}

@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import Exa from "exa-js";
+import {
+  getStory,
+  upsertStory,
+  getTimeline,
+  addTimelineEntry,
+} from "@/lib/store";
+import { TimelineEntry } from "@/lib/types";
 
 const exa = new Exa(process.env.EXA_API_KEY);
 
@@ -9,12 +16,12 @@ const OUTPUT_SCHEMA = {
     headline: {
       type: "string",
       description:
-        "A specific, concrete headline for the single most important new development (e.g. 'U.S. KC-135 refueling aircraft crashes in Iraq')",
+        "A specific, concrete headline for the single most important new development",
     },
     summary: {
       type: "string",
       description:
-        "2-4 paragraph wire-service style dispatch about this development. Include names, places, numbers, direct quotes. Attribute to sources. Separate paragraphs with double newlines.",
+        "2-4 paragraph wire-service style dispatch. Include names, places, numbers, direct quotes. Attribute to sources. Separate paragraphs with double newlines.",
     },
     sources: {
       type: "array",
@@ -27,7 +34,7 @@ const OUTPUT_SCHEMA = {
           isPrimary: {
             type: "boolean",
             description:
-              "True if this is a first-hand/official source (government, military, wire service like AP/Reuters)",
+              "True if first-hand/official source (government, military, wire service)",
           },
         },
         required: ["title", "url"],
@@ -35,22 +42,29 @@ const OUTPUT_SCHEMA = {
     },
     hasNewDevelopments: {
       type: "boolean",
-      description: "False if no genuinely new developments were found since the given time",
+      description:
+        "False if no genuinely new developments were found since the given time",
     },
   },
   required: ["headline", "summary", "sources", "hasNewDevelopments"],
 };
 
-export async function POST(req: NextRequest) {
+export async function POST(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const story = getStory(id);
+  if (!story) {
+    return NextResponse.json({ error: "Story not found" }, { status: 404 });
+  }
+
   try {
-    const { query, startPublishedDate } = await req.json();
-
-    if (!query) {
-      return NextResponse.json({ error: "Query is required" }, { status: 400 });
-    }
-
-    const since = startPublishedDate
-      ? new Date(startPublishedDate).toISOString()
+    const timeline = getTimeline(id);
+    const lastTimestamp =
+      timeline.length > 0 ? timeline[0].timestamp : undefined;
+    const since = lastTimestamp
+      ? new Date(lastTimestamp).toISOString()
       : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
     const sinceReadable = new Date(since).toLocaleString("en-US", {
@@ -62,7 +76,7 @@ export async function POST(req: NextRequest) {
       timeZoneName: "short",
     });
 
-    const instructions = `You are a newsroom researcher. Find the SINGLE most important new development about: "${query}"
+    const instructions = `You are a newsroom researcher. Find the SINGLE most important new development about: "${story.title}"
 
 CRITICAL: Only find developments that occurred AFTER ${sinceReadable}. Ignore anything published before this time.
 
@@ -87,18 +101,38 @@ Instructions:
       timeoutMs: 120000,
     });
 
-    if (result.status === "completed" && result.output) {
-      const parsed = result.output.parsed || JSON.parse(result.output.content);
-      return NextResponse.json(parsed);
+    if (result.status !== "completed" || !result.output) {
+      return NextResponse.json(
+        { error: `Research ${result.status}` },
+        { status: 500 }
+      );
     }
 
-    return NextResponse.json(
-      { error: "Research did not complete", status: result.status },
-      { status: 500 }
-    );
+    const parsed = result.output.parsed || JSON.parse(result.output.content);
+
+    const entry: TimelineEntry = {
+      id: Date.now().toString(36),
+      timestamp: new Date().toISOString(),
+      headline: parsed.hasNewDevelopments
+        ? parsed.headline
+        : "No new developments",
+      summary: parsed.hasNewDevelopments
+        ? parsed.summary
+        : "No new developments found since the last check.",
+      sources: parsed.hasNewDevelopments ? parsed.sources : [],
+    };
+
+    addTimelineEntry(id, entry);
+    upsertStory({
+      ...story,
+      lastUpdated: new Date().toISOString(),
+      description: `${timeline.length + 1} updates`,
+    });
+
+    return NextResponse.json({ entry });
   } catch (error: unknown) {
-    console.error("Exa research error:", error);
-    const message = error instanceof Error ? error.message : "Research failed";
+    console.error("Update error:", error);
+    const message = error instanceof Error ? error.message : "Update failed";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

@@ -1,28 +1,53 @@
 import { NextRequest, NextResponse } from "next/server";
 import Exa from "exa-js";
-import OpenAI from "openai";
 import {
   getStories,
   upsertStory,
   getTimeline,
-  getKnownUrls,
   addTimelineEntry,
 } from "@/lib/store";
-import { SearchResult, TimelineEntry } from "@/lib/types";
+import { TimelineEntry } from "@/lib/types";
 
 const exa = new Exa(process.env.EXA_API_KEY);
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-const PRIMARY_DOMAINS = [
-  "whitehouse.gov", "state.gov", "defense.gov", "centcom.mil",
-  "congress.gov", "treasury.gov", "justice.gov", "fbi.gov", "cia.gov",
-  "cdc.gov", "who.int", "un.org", "nato.int",
-  "gov.uk", "parliament.uk", "supremecourt.gov",
-  "federalreserve.gov", "sec.gov",
-  "reuters.com", "apnews.com", "afp.com",
-];
+const OUTPUT_SCHEMA = {
+  type: "object",
+  properties: {
+    headline: {
+      type: "string",
+      description:
+        "A specific, concrete headline for the single most important new development",
+    },
+    summary: {
+      type: "string",
+      description:
+        "2-4 paragraph wire-service style dispatch. Include names, places, numbers, direct quotes. Attribute to sources. Separate paragraphs with double newlines.",
+    },
+    sources: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          url: { type: "string" },
+          publishedDate: { type: "string" },
+          isPrimary: {
+            type: "boolean",
+            description:
+              "True if first-hand/official source (government, military, wire service)",
+          },
+        },
+        required: ["title", "url"],
+      },
+    },
+    hasNewDevelopments: {
+      type: "boolean",
+      description: "False if no genuinely new developments were found since the given time",
+    },
+  },
+  required: ["headline", "summary", "sources", "hasNewDevelopments"],
+};
 
-// Protect the cron endpoint with a secret
 function isAuthorized(req: NextRequest): boolean {
   const secret = req.nextUrl.searchParams.get("secret");
   return secret === process.env.CRON_SECRET;
@@ -30,136 +55,74 @@ function isAuthorized(req: NextRequest): boolean {
 
 async function updateStory(storyId: string, storyTitle: string) {
   const timeline = getTimeline(storyId);
-  const knownUrls = getKnownUrls(storyId);
-
   const lastTimestamp =
     timeline.length > 0 ? timeline[0].timestamp : undefined;
-  const since =
-    lastTimestamp ||
-    new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const since = lastTimestamp
+    ? new Date(lastTimestamp).toISOString()
+    : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-  const searchOpts = {
-    type: "neural" as const,
-    useAutoprompt: true,
-    startPublishedDate: since,
-    contents: { text: { maxCharacters: 1000 } },
-  };
-
-  // Dual search: primary sources + general news
-  const [primaryRes, generalRes] = await Promise.all([
-    exa.search(storyTitle + " official statement announcement", {
-      ...searchOpts,
-      numResults: 10,
-      includeDomains: PRIMARY_DOMAINS,
-    }).catch(() => null),
-    exa.search(storyTitle, {
-      ...searchOpts,
-      numResults: 15,
-      category: "news",
-    }),
-  ]);
-
-  const seen = new Set<string>();
-  const allResults: SearchResult[] = [];
-
-  const mapResult = (r: (typeof generalRes.results)[0], isPrimary: boolean): SearchResult => ({
-    title: r.title || "Untitled",
-    url: r.url,
-    publishedDate: r.publishedDate || null,
-    author: r.author || null,
-    text: r.text || "",
-    isPrimary,
+  const sinceReadable = new Date(since).toLocaleString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
   });
 
-  if (primaryRes) {
-    for (const r of primaryRes.results) {
-      if (!seen.has(r.url)) {
-        seen.add(r.url);
-        allResults.push(mapResult(r, true));
-      }
-    }
-  }
-  for (const r of generalRes.results) {
-    if (!seen.has(r.url)) {
-      seen.add(r.url);
-      const domain = new URL(r.url).hostname.replace("www.", "");
-      const isPrimary = PRIMARY_DOMAINS.some(
-        (d) => domain === d || domain.endsWith("." + d)
-      );
-      allResults.push(mapResult(r, isPrimary));
-    }
+  const instructions = `You are a newsroom researcher. Find the SINGLE most important new development about: "${storyTitle}"
+
+CRITICAL: Only find developments that occurred AFTER ${sinceReadable}. Ignore anything published before this time.
+
+Instructions:
+1. Search for the most recent breaking news, official statements, and wire service reports
+2. Prioritize PRIMARY SOURCES: government websites (.gov, .mil), official statements, press releases, wire services (AP, Reuters, AFP)
+3. Identify the SINGLE most newsworthy new development — not a roundup, not a summary of multiple events
+4. Extract the concrete facts: who, what, where, when, direct quotes
+5. Write it up as ONE wire-service dispatch (2-4 paragraphs)
+6. Do NOT include Wikipedia, general explainers, or background pieces
+7. If there are no genuinely new developments since the given time, set hasNewDevelopments to false
+8. IMPORTANT: Do NOT embed citations, URLs, or source references in the summary text. No inline links, no [Source](url) patterns, no bracketed references. The sources are provided separately in the sources field. The summary should read as clean prose.`;
+
+  const task = await exa.research.create({
+    instructions,
+    model: "exa-research",
+    outputSchema: OUTPUT_SCHEMA,
+  });
+
+  const result = await exa.research.pollUntilFinished(task.researchId, {
+    pollInterval: 2000,
+    timeoutMs: 120000,
+  });
+
+  if (result.status !== "completed" || !result.output) {
+    return { storyId, updated: false, error: `Research ${result.status}` };
   }
 
-  // Filter to only new sources
-  const newSources = allResults.filter((r) => !knownUrls.has(r.url));
+  const parsed = result.output.parsed || JSON.parse(result.output.content);
 
-  if (newSources.length === 0 && timeline.length > 0) {
+  if (!parsed.hasNewDevelopments) {
     const entry: TimelineEntry = {
       id: Date.now().toString(36),
       timestamp: new Date().toISOString(),
+      headline: "No new developments",
       summary: "No new developments found since the last check.",
-      newSources: [],
-      totalSourceCount: knownUrls.size,
+      sources: [],
     };
     addTimelineEntry(storyId, entry);
-    return { storyId, newSources: 0 };
+    return { storyId, updated: false };
   }
-
-  // Summarize with primary source priority
-  const sorted = [...(newSources.length > 0 ? newSources : allResults)].sort(
-    (a, b) => (b.isPrimary ? 1 : 0) - (a.isPrimary ? 1 : 0)
-  );
-
-  const articleSummaries = sorted
-    .slice(0, 8)
-    .map(
-      (a, i) =>
-        `[${i + 1}]${a.isPrimary ? " [PRIMARY SOURCE]" : ""} "${a.title}" (${a.url})\n${a.text}`
-    )
-    .join("\n\n---\n\n");
-
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    max_tokens: 500,
-    messages: [
-      {
-        role: "system",
-        content: `You are a wire service editor writing live updates for a breaking news blog. Your job is to extract the single most important NEW, SPECIFIC development from the articles provided and write it up as a discrete event update.
-
-Rules:
-- PRIORITIZE articles marked [PRIMARY SOURCE] — these are official statements, government releases, or wire service dispatches. Build your update around these when available.
-- Lead with the most concrete, specific new fact
-- Write 2-4 short paragraphs, like a wire service dispatch
-- Include specific details: names, places, numbers, direct quotes when available
-- Attribute information to its original source
-- Do NOT write vague summaries or overviews of the general situation
-- Do NOT use phrases like "significant developments" or "escalating tensions"
-- Write as if each update is a standalone news item a reader encounters on a live blog
-- Use past tense for events that happened, present tense for ongoing situations`,
-      },
-      {
-        role: "user",
-        content: `Extract the most important specific new development from these articles about "${storyTitle}" and write it as a live blog update:\n\n${articleSummaries}`,
-      },
-    ],
-  });
-
-  const summary =
-    completion.choices[0]?.message?.content || "Unable to generate summary.";
-
-  const updatedKnownCount = knownUrls.size + newSources.length;
 
   const entry: TimelineEntry = {
     id: Date.now().toString(36),
     timestamp: new Date().toISOString(),
-    summary,
-    newSources,
-    totalSourceCount: updatedKnownCount,
+    headline: parsed.headline,
+    summary: parsed.summary,
+    sources: parsed.sources,
   };
-
   addTimelineEntry(storyId, entry);
 
-  return { storyId, newSources: newSources.length };
+  return { storyId, updated: true, headline: parsed.headline };
 }
 
 export async function GET(req: NextRequest) {
@@ -172,7 +135,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ message: "No stories to update" });
   }
 
-  // Check which stories are due for an update
   const now = Date.now();
   const due = stories.filter((s) => {
     const last = new Date(s.lastUpdated).getTime();
@@ -181,26 +143,13 @@ export async function GET(req: NextRequest) {
   });
 
   if (due.length === 0) {
-    return NextResponse.json({
-      message: "No stories due for update",
-      nextCheck: stories
-        .map((s) => {
-          const next =
-            new Date(s.lastUpdated).getTime() + s.refreshInterval * 60 * 1000;
-          return { title: s.title, nextUpdate: new Date(next).toISOString() };
-        })
-        .sort(
-          (a, b) =>
-            new Date(a.nextUpdate).getTime() - new Date(b.nextUpdate).getTime()
-        ),
-    });
+    return NextResponse.json({ message: "No stories due for update" });
   }
 
   const results = [];
   for (const story of due) {
     try {
       const result = await updateStory(story.id, story.title);
-      // Update the story's lastUpdated
       upsertStory({ ...story, lastUpdated: new Date().toISOString() });
       results.push(result);
     } catch (err) {

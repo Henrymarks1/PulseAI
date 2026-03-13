@@ -23,9 +23,6 @@ importers:
       next:
         specifier: ^16.1.6
         version: 16.1.6(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      openai:
-        specifier: ^6.27.0
-        version: 6.27.0(zod@3.25.76)
       postcss:
         specifier: ^8.5.8
         version: 8.5.8
@@ -511,18 +508,6 @@ packages:
       zod:
         optional: true
 
-  openai@6.27.0:
-    resolution: {integrity: sha512-osTKySlrdYrLYTt0zjhY8yp0JUBmWDCN+Q+QxsV4xMQnnoVFpylgKGgxwN8sSdTNw0G4y+WUXs4eCMWpyDNWZQ==}
-    hasBin: true
-    peerDependencies:
-      ws: ^8.18.0
-      zod: ^3.25 || ^4.0
-    peerDependenciesMeta:
-      ws:
-        optional: true
-      zod:
-        optional: true
-
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
 
@@ -961,10 +946,6 @@ snapshots:
       whatwg-url: 5.0.0
 
   openai@5.23.2(zod@3.25.76):
-    optionalDependencies:
-      zod: 3.25.76
-
-  openai@6.27.0(zod@3.25.76):
     optionalDependencies:
       zod: 3.25.76
 
