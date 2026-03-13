@@ -71,7 +71,7 @@ const updateResponseSchema = z.object({
   summary: z
     .string()
     .describe(
-      "Fact-rich bullet points for journalists. Each bullet starts with '• ' and states one specific new fact (who, what, where, when, numbers). 3-6 bullets. No narrative prose — just the verifiable facts. Separate bullets with newlines."
+      "Fact-rich bullet points for journalists. Each bullet starts with '• ' and states one specific new fact (who, what, where, when, numbers). 3-6 bullets. No narrative prose — just the verifiable facts. Separate bullets with newlines.",
     ),
   sources: z.array(
     z.object({
@@ -79,17 +79,15 @@ const updateResponseSchema = z.object({
       url: z.string(),
       publishedDate: z.string().optional(),
       isPrimary: z.boolean().optional(),
-    })
+    }),
   ),
 });
 
 async function runAgentUpdate(
   storyTitle: string,
-  timeline: TimelineEntry[]
+  timeline: TimelineEntry[],
 ): Promise<z.infer<typeof updateResponseSchema>> {
-  const threeHoursAgo = new Date(
-    Date.now() - 3 * 60 * 60 * 1000
-  ).toISOString();
+  const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
   const priorContext = buildPriorContext(timeline);
 
   const systemPrompt = `You are a tenacious breaking news researcher for a newsroom. Your job is to find NEW developments about a story that journalists haven't reported yet.
@@ -144,7 +142,7 @@ Respond with valid JSON only, no other text. The JSON must have these fields:
         for (const call of toolCalls) {
           console.log(
             `[Pulse Agent]   Tool: ${call.toolName}`,
-            (call.input as Record<string, string>)?.query || ""
+            (call.input as Record<string, string>)?.query || "",
           );
         }
       }
@@ -157,7 +155,7 @@ Respond with valid JSON only, no other text. The JSON must have these fields:
             if ((part as Record<string, unknown>).isError) {
               console.error(
                 `[Pulse Agent]   Tool ERROR:`,
-                JSON.stringify(part.result, null, 2)
+                JSON.stringify(part.result, null, 2),
               );
             } else if (part.result) {
               const r = part.result as {
@@ -165,10 +163,10 @@ Respond with valid JSON only, no other text. The JSON must have these fields:
               };
               if (r?.results) {
                 console.log(
-                  `[Pulse Agent]   Found ${r.results.length} results:`
+                  `[Pulse Agent]   Found ${r.results.length} results:`,
                 );
                 r.results.forEach((s) =>
-                  console.log(`[Pulse Agent]     - ${s.title}`)
+                  console.log(`[Pulse Agent]     - ${s.title}`),
                 );
               }
             }
@@ -177,11 +175,14 @@ Respond with valid JSON only, no other text. The JSON must have these fields:
       }
       if (step.text) {
         console.log(
-          `[Pulse Agent]   Response: ${(step.text as string).slice(0, 200)}...`
+          `[Pulse Agent]   Response: ${(step.text as string).slice(0, 200)}...`,
         );
       }
       if (!toolCalls?.length && !step.text) {
-        console.log(`[Pulse Agent]   Raw step:`, JSON.stringify(step, null, 2).slice(0, 500));
+        console.log(
+          `[Pulse Agent]   Raw step:`,
+          JSON.stringify(step, null, 2).slice(0, 500),
+        );
       }
     },
   });
@@ -200,7 +201,7 @@ Respond with valid JSON only, no other text. The JSON must have these fields:
 
 export async function POST(
   _req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
 
@@ -256,13 +257,15 @@ Do NOT embed citations, URLs, or source references in the summary text. The sour
           model: "exa-research",
           outputSchema: INITIAL_SCHEMA,
         }),
-        // @ts-expect-error -- Next.js extends fetch with cache/revalidate options
         cache: "no-store",
       });
 
       if (!createRes.ok) {
         const errBody = await createRes.text();
-        console.error(`[Pulse] Research create failed (${createRes.status}):`, errBody);
+        console.error(
+          `[Pulse] Research create failed (${createRes.status}):`,
+          errBody,
+        );
         throw new Error(`Exa Research create failed: ${createRes.status}`);
       }
 
@@ -279,9 +282,8 @@ Do NOT embed citations, URLs, or source references in the summary text. The sour
           `${EXA_BASE}/research/v1/${task.researchId}`,
           {
             headers: { "x-api-key": EXA_API_KEY },
-            // @ts-expect-error -- Next.js extends fetch
             cache: "no-store",
-          }
+          },
         );
         if (!pollRes.ok) {
           console.warn(`[Pulse] Poll returned ${pollRes.status}, retrying...`);
@@ -302,7 +304,7 @@ Do NOT embed citations, URLs, or source references in the summary text. The sour
       if (!result || !result.output) {
         return NextResponse.json(
           { error: "Research timed out or failed" },
-          { status: 500 }
+          { status: 500 },
         );
       }
 
