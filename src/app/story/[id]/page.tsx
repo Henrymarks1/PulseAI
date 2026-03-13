@@ -282,7 +282,7 @@ export default function StoryDashboard() {
               <div className="mb-4">
                 <ul className="space-y-1.5">
                   {cleanSummary(entry.summary)
-                    .split("\n")
+                    .split(/\n|(?=•)|(?=\-\s)/)
                     .map((line) => line.replace(/^[•\-\*]\s*/, "").trim())
                     .filter((line) => line.length > 0)
                     .map((fact, fi) => (
