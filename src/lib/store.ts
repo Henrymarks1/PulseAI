@@ -61,6 +61,22 @@ export async function addTimelineEntry(
   return entries;
 }
 
+// --- Locks ---
+
+function lockKey(storyId: string) {
+  return `pulse:lock:${storyId}`;
+}
+
+/** Try to acquire an update lock. Returns true if acquired, false if already held. */
+export async function acquireUpdateLock(storyId: string, ttlSeconds = 300): Promise<boolean> {
+  const result = await redis.set(lockKey(storyId), Date.now(), { nx: true, ex: ttlSeconds });
+  return result === "OK";
+}
+
+export async function releaseUpdateLock(storyId: string): Promise<void> {
+  await redis.del(lockKey(storyId));
+}
+
 // --- Known URLs ---
 
 export async function getKnownUrls(storyId: string): Promise<Set<string>> {

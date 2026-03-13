@@ -8,6 +8,8 @@ import {
   upsertStory,
   getTimeline,
   addTimelineEntry,
+  acquireUpdateLock,
+  releaseUpdateLock,
 } from "@/lib/store";
 import { TimelineEntry } from "@/lib/types";
 import { z } from "zod";
@@ -210,6 +212,11 @@ export async function POST(
     return NextResponse.json({ error: "Story not found" }, { status: 404 });
   }
 
+  const locked = await acquireUpdateLock(id);
+  if (!locked) {
+    return NextResponse.json({ error: "Update already in progress" }, { status: 409 });
+  }
+
   try {
     const timeline = await getTimeline(id);
     const isInitial = timeline.length === 0;
@@ -356,5 +363,7 @@ Do NOT embed citations, URLs, or source references in the summary text. The sour
     console.error("Update error:", error);
     const message = error instanceof Error ? error.message : "Update failed";
     return NextResponse.json({ error: message }, { status: 500 });
+  } finally {
+    await releaseUpdateLock(id);
   }
 }
