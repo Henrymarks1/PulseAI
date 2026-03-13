@@ -1,0 +1,22 @@
+@import "tailwindcss";
+
+@theme {
+  --font-serif: "Georgia", "Times New Roman", serif;
+  --font-sans: "Inter", -apple-system, "Segoe UI", sans-serif;
+  --color-pulse-black: #1a1a1a;
+  --color-pulse-gray: #666666;
+  --color-pulse-light: #f5f5f5;
+  --color-pulse-border: #e0e0e0;
+  --color-pulse-accent: #c41e3a;
+  --color-pulse-blue: #326891;
+}
+
+body {
+  font-family: var(--font-sans);
+  color: var(--color-pulse-black);
+  background: #fafafa;
+}
+
+h1, h2, h3 {
+  font-family: var(--font-serif);
+}
