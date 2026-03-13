@@ -95,7 +95,7 @@ function buildPriorContext(timeline: TimelineEntry[]): string {
 
 export async function POST(
   _req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
 
@@ -138,33 +138,42 @@ CRITICAL: Only consider articles and events FIRST PUBLISHED within the last 30 m
 ${priorContext}
 
 Instructions:
-1. Search for breaking news, official statements, and wire service reports published in the LAST 30 MINUTES ONLY
-2. Prioritize PRIMARY SOURCES: government websites (.gov, .mil), official statements, press releases, wire services (AP, Reuters, AFP)
-3. Identify the SINGLE most newsworthy NEW development that is NOT already covered above
-4. Extract the concrete facts: who, what, where, when, direct quotes
-5. Write it up as ONE wire-service dispatch (2-4 paragraphs)
-6. Do NOT include Wikipedia, general explainers, or background pieces
-7. If there are no genuinely new developments published in the last 30 minutes, set hasNewDevelopments to false
-8. IMPORTANT: Do NOT embed citations, URLs, or source references in the summary text. No inline links, no [Source](url) patterns, no bracketed references. The sources are provided separately in the sources field. The summary should read as clean prose.`;
+1. Search ALL credible news sources published in the LAST 30 MINUTES ONLY — major newspapers (NYT, WSJ, Washington Post, Guardian), wire services (AP, Reuters, AFP), broadcasters (CNN, BBC, Al Jazeera, Fox News), government/official sources, and any other credible outlets
+2. Identify the SINGLE most newsworthy NEW development that is NOT already covered above
+3. Extract the concrete facts: who, what, where, when, direct quotes
+4. Write it up as ONE wire-service dispatch (2-4 paragraphs)
+5. Do NOT include Wikipedia, general explainers, or background pieces
+6. If there are no genuinely new developments published in the last 30 minutes, set hasNewDevelopments to false
+7. IMPORTANT: Do NOT embed citations, URLs, or source references in the summary text. No inline links, no [Source](url) patterns, no bracketed references. The sources are provided separately in the sources field. The summary should read as clean prose.`;
       schema = UPDATE_SCHEMA;
     }
 
-    const task = await exa.research.create({
-      instructions,
-      model: isInitial ? "exa-research" : "exa-research-fast",
-      outputSchema: schema,
-    });
+    // Try fast model first for updates, fall back to standard if it fails
+    let result;
+    const models = ["exa-research" as const];
 
-    const result = await exa.research.pollUntilFinished(task.researchId, {
-      pollInterval: 2000,
-      timeoutMs: 300000,
-    });
+    for (const model of models) {
+      try {
+        console.log(`[Pulse] Starting research with model: ${model}`);
+        const task = await exa.research.create({
+          instructions,
+          model,
+          outputSchema: schema,
+        });
+        result = await exa.research.pollUntilFinished(task.researchId, {
+          pollInterval: 2000,
+          timeoutMs: 300000,
+        });
+        if (result.status === "completed") break;
+      } catch (err) {
+        console.error(`[Pulse] Model ${model} failed:`, err);
+        if (model === models[models.length - 1]) throw err;
+        console.log(`[Pulse] Falling back to next model...`);
+      }
+    }
 
-    if (result.status !== "completed" || !result.output) {
-      return NextResponse.json(
-        { error: `Research ${result.status}` },
-        { status: 500 }
-      );
+    if (!result || result.status !== "completed" || !result.output) {
+      return NextResponse.json({ error: `Research failed` }, { status: 500 });
     }
 
     const parsed = result.output.parsed || JSON.parse(result.output.content);

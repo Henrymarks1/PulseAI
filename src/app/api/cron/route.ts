@@ -83,14 +83,13 @@ CRITICAL: Only consider articles and events FIRST PUBLISHED within the last 30 m
 ${priorContext}
 
 Instructions:
-1. Search for breaking news, official statements, and wire service reports published in the LAST 30 MINUTES ONLY
-2. Prioritize PRIMARY SOURCES: government websites (.gov, .mil), official statements, press releases, wire services (AP, Reuters, AFP)
-3. Identify the SINGLE most newsworthy NEW development that is NOT already covered above
-4. Extract the concrete facts: who, what, where, when, direct quotes
-5. Write it up as ONE wire-service dispatch (2-4 paragraphs)
-6. Do NOT include Wikipedia, general explainers, or background pieces
-7. If there are no genuinely new developments published in the last 30 minutes, set hasNewDevelopments to false
-8. IMPORTANT: Do NOT embed citations, URLs, or source references in the summary text. No inline links, no [Source](url) patterns, no bracketed references. The sources are provided separately in the sources field. The summary should read as clean prose.`;
+1. Search ALL credible news sources published in the LAST 30 MINUTES ONLY — major newspapers (NYT, WSJ, Washington Post, Guardian), wire services (AP, Reuters, AFP), broadcasters (CNN, BBC, Al Jazeera, Fox News), government/official sources, and any other credible outlets
+2. Identify the SINGLE most newsworthy NEW development that is NOT already covered above
+3. Extract the concrete facts: who, what, where, when, direct quotes
+4. Write it up as ONE wire-service dispatch (2-4 paragraphs)
+5. Do NOT include Wikipedia, general explainers, or background pieces
+6. If there are no genuinely new developments published in the last 30 minutes, set hasNewDevelopments to false
+7. IMPORTANT: Do NOT embed citations, URLs, or source references in the summary text. No inline links, no [Source](url) patterns, no bracketed references. The sources are provided separately in the sources field. The summary should read as clean prose.`;
 
   const task = await exa.research.create({
     instructions,

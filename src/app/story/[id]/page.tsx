@@ -70,6 +70,7 @@ export default function StoryDashboard() {
   const [refreshInterval, setRefreshInterval] = useState(30);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const hasFetchedInitial = useRef(false);
+  const loadingRef = useRef(false);
 
   const loadData = useCallback(async () => {
     const res = await fetch(`/api/stories?id=${id}`);
@@ -85,7 +86,8 @@ export default function StoryDashboard() {
   }, [loadData]);
 
   const checkForUpdates = useCallback(async () => {
-    if (!story || loading) return;
+    if (!story || loadingRef.current) return;
+    loadingRef.current = true;
     setLoading(true);
 
     try {
@@ -94,9 +96,10 @@ export default function StoryDashboard() {
     } catch (err) {
       console.error("Fetch error:", err);
     } finally {
+      loadingRef.current = false;
       setLoading(false);
     }
-  }, [story, id, loadData, loading]);
+  }, [story, id, loadData]);
 
   // Initial fetch — runs exactly once
   useEffect(() => {
