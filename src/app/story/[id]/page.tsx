@@ -69,6 +69,7 @@ export default function StoryDashboard() {
   const [loading, setLoading] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(30);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const hasFetchedInitial = useRef(false);
 
   const loadData = useCallback(async () => {
     const res = await fetch(`/api/stories?id=${id}`);
@@ -84,11 +85,10 @@ export default function StoryDashboard() {
   }, [loadData]);
 
   const checkForUpdates = useCallback(async () => {
-    if (!story) return;
+    if (!story || loading) return;
     setLoading(true);
 
     try {
-      // Fire-and-forget to server — runs to completion even if we navigate away
       await fetch(`/api/stories/${id}/update`, { method: "POST" });
       await loadData();
     } catch (err) {
@@ -96,11 +96,12 @@ export default function StoryDashboard() {
     } finally {
       setLoading(false);
     }
-  }, [story, id, loadData]);
+  }, [story, id, loadData, loading]);
 
-  // Initial fetch if no timeline yet
+  // Initial fetch — runs exactly once
   useEffect(() => {
-    if (story && timeline.length === 0 && !loading) {
+    if (story && timeline.length === 0 && !hasFetchedInitial.current) {
+      hasFetchedInitial.current = true;
       checkForUpdates();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -179,15 +180,16 @@ export default function StoryDashboard() {
         <button
           onClick={checkForUpdates}
           disabled={loading}
-          className="px-5 py-2.5 bg-pulse-black text-white rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="px-5 py-2.5 bg-pulse-black text-white rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
         >
-          {loading ? "Researching..." : "Check for Updates"}
+          {loading && (
+            <svg className="animate-spin h-4 w-4 text-white" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+            </svg>
+          )}
+          {loading ? "Searching..." : "Check for Updates"}
         </button>
-        {loading && (
-          <span className="ml-3 text-sm text-pulse-gray">
-            AI researcher is searching for new developments...
-          </span>
-        )}
       </div>
 
       {/* Timeline */}
