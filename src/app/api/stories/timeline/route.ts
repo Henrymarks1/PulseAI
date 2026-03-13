@@ -13,6 +13,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const timeline = addTimelineEntry(storyId, entry);
+  const timeline = await addTimelineEntry(storyId, entry);
   return NextResponse.json({ ok: true, count: timeline.length });
 }

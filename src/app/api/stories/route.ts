@@ -13,17 +13,17 @@ export async function GET(req: NextRequest) {
   const id = req.nextUrl.searchParams.get("id");
 
   if (id) {
-    const stories = getStories();
+    const stories = await getStories();
     const story = stories.find((s) => s.id === id);
     if (!story) {
       return NextResponse.json({ error: "Story not found" }, { status: 404 });
     }
-    const timeline = getTimeline(id);
-    const knownUrls = Array.from(getKnownUrls(id));
+    const timeline = await getTimeline(id);
+    const knownUrls = Array.from(await getKnownUrls(id));
     return NextResponse.json({ story, timeline, knownUrls });
   }
 
-  return NextResponse.json({ stories: getStories() });
+  return NextResponse.json({ stories: await getStories() });
 }
 
 // POST — create or update a story
@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
     lastUpdated: new Date().toISOString(),
     refreshInterval: body.refreshInterval || 30,
   };
-  upsertStory(story);
+  await upsertStory(story);
   return NextResponse.json({ story });
 }
 
@@ -47,6 +47,6 @@ export async function DELETE(req: NextRequest) {
   if (!id) {
     return NextResponse.json({ error: "id required" }, { status: 400 });
   }
-  deleteStory(id);
+  await deleteStory(id);
   return NextResponse.json({ ok: true });
 }

@@ -237,23 +237,27 @@ export default function StoryDashboard() {
 
               {/* Headline */}
               <h3
-                className="text-2xl font-bold leading-tight mb-3"
-                style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}
+                className="text-xl font-semibold leading-tight mb-2"
               >
                 {entry.headline}
               </h3>
 
-              {/* Summary — multi-paragraph dispatch */}
+              {/* Key facts — bullet-point briefing */}
               <div className="mb-4">
-                {cleanSummary(entry.summary).split("\n\n").map((para, pi) => (
-                  <p
-                    key={pi}
-                    className="text-lg leading-relaxed text-pulse-black mb-3 last:mb-0"
-                    style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}
-                  >
-                    {para}
-                  </p>
-                ))}
+                <ul className="space-y-1.5">
+                  {cleanSummary(entry.summary)
+                    .split("\n")
+                    .map((line) => line.replace(/^[•\-\*]\s*/, "").trim())
+                    .filter((line) => line.length > 0)
+                    .map((fact, fi) => (
+                      <li
+                        key={fi}
+                        className="text-[15px] leading-snug text-pulse-black pl-4 relative before:content-['•'] before:absolute before:left-0 before:text-pulse-accent before:font-bold"
+                      >
+                        {fact}
+                      </li>
+                    ))}
+                </ul>
               </div>
 
               {/* Sources */}

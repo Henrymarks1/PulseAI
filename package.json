@@ -13,6 +13,7 @@
     "@tailwindcss/postcss": "^4.2.1",
     "@types/node": "^25.5.0",
     "@types/react": "^19.2.14",
+    "@upstash/redis": "^1.37.0",
     "ai": "^6.0.116",
     "exa-js": "^2.8.0",
     "next": "^16.1.6",

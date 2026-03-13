@@ -24,7 +24,7 @@ const INITIAL_SCHEMA = {
     summary: {
       type: "string",
       description:
-        "A single paragraph of about 6 sentences summarizing the story so far. Cover the key events, major players, and current status concisely.",
+        "A fact-rich bullet-point briefing for journalists. Each bullet starts with '• ' and states one specific, verifiable fact (who, what, where, when, numbers/figures). Include 6-10 bullets covering key events, major players, and current status. Separate bullets with newlines. No narrative prose — just the facts.",
     },
     sources: {
       type: "array",
@@ -71,7 +71,7 @@ const updateResponseSchema = z.object({
   summary: z
     .string()
     .describe(
-      "Brief 2-3 paragraph update, each paragraph 2-3 sentences. Concise wire-service style. Separate paragraphs with double newlines."
+      "Fact-rich bullet points for journalists. Each bullet starts with '• ' and states one specific new fact (who, what, where, when, numbers). 3-6 bullets. No narrative prose — just the verifiable facts. Separate bullets with newlines."
     ),
   sources: z.array(
     z.object({
@@ -105,7 +105,7 @@ OUTPUT FORMAT:
 Respond with valid JSON only, no other text. The JSON must have these fields:
 - "hasNewDevelopments": boolean — false if nothing new was found
 - "headline": string — specific, concrete headline (e.g. "Pentagon confirms second wave of strikes on Iranian air defenses")
-- "summary": string — 2-3 short paragraphs (2-3 sentences each), separated by \\n\\n. Wire-service style. No URLs or citations in the text.
+- "summary": string — fact-rich bullet points for journalists. Each bullet starts with "• " and states one specific new fact (who, what, where, when, numbers/figures). 3-6 bullets separated by newlines. No narrative prose, no URLs or citations — just verifiable facts.
 - "sources": array of objects with "title", "url", and optionally "publishedDate" and "isPrimary" (true for government/military/wire service sources)`;
 
   const { text, steps } = await generateText({
@@ -190,22 +190,24 @@ export async function POST(
 ) {
   const { id } = await params;
 
-  const story = getStory(id);
+  const story = await getStory(id);
   if (!story) {
     return NextResponse.json({ error: "Story not found" }, { status: 404 });
   }
 
   try {
-    const timeline = getTimeline(id);
+    const timeline = await getTimeline(id);
     const isInitial = timeline.length === 0;
 
     let entry: TimelineEntry;
 
     if (isInitial) {
       // Use Exa Research agent for the initial summary
-      const instructions = `You are a newsroom researcher. Research the current state of this story: "${story.title}"
+      const instructions = `You are a newsroom researcher briefing journalists. Research the current state of this story: "${story.title}"
 
-Write a concise single-paragraph summary (about 6 sentences) of where this story stands right now. Cover what happened, the key developments, major players, and current status.
+Write a fact-rich bullet-point briefing. Each bullet starts with "• " and states one specific, verifiable fact — who did what, where, when, with what numbers or figures. Include 6-10 bullets covering key events, major players, and current status.
+
+No narrative prose. No analysis or opinion. Just the facts a journalist needs to write their own story.
 
 Use a wide range of sources: major newspapers (NYT, WSJ, Washington Post), wire services (AP, Reuters, AFP), broadcasters (CNN, BBC, Al Jazeera), government/official sources, and any other credible news outlets.
 Do NOT embed citations, URLs, or source references in the summary text. The sources field is separate.`;
@@ -262,8 +264,8 @@ Do NOT embed citations, URLs, or source references in the summary text. The sour
       }
     }
 
-    addTimelineEntry(id, entry);
-    upsertStory({
+    await addTimelineEntry(id, entry);
+    await upsertStory({
       ...story,
       lastUpdated: new Date().toISOString(),
       description: `${timeline.length + 1} updates`,

@@ -1,77 +1,70 @@
-import fs from "fs";
-import path from "path";
+import { Redis } from "@upstash/redis";
 import { TrackedStory, TimelineEntry } from "./types";
 
-const DATA_DIR = path.join(process.cwd(), "data");
-const STORIES_FILE = path.join(DATA_DIR, "stories.json");
-const TIMELINES_DIR = path.join(DATA_DIR, "timelines");
+const redis = Redis.fromEnv();
 
-function ensureDirs() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-  if (!fs.existsSync(TIMELINES_DIR))
-    fs.mkdirSync(TIMELINES_DIR, { recursive: true });
+const STORIES_KEY = "pulse:stories";
+function timelineKey(storyId: string) {
+  return `pulse:timeline:${storyId}`;
 }
 
 // --- Stories ---
 
-export function getStories(): TrackedStory[] {
-  ensureDirs();
-  if (!fs.existsSync(STORIES_FILE)) return [];
-  return JSON.parse(fs.readFileSync(STORIES_FILE, "utf-8"));
+export async function getStories(): Promise<TrackedStory[]> {
+  const data = await redis.get<TrackedStory[]>(STORIES_KEY);
+  return data || [];
 }
 
-export function saveStories(stories: TrackedStory[]) {
-  ensureDirs();
-  fs.writeFileSync(STORIES_FILE, JSON.stringify(stories, null, 2));
+export async function saveStories(stories: TrackedStory[]) {
+  await redis.set(STORIES_KEY, stories);
 }
 
-export function getStory(id: string): TrackedStory | undefined {
-  return getStories().find((s) => s.id === id);
+export async function getStory(id: string): Promise<TrackedStory | undefined> {
+  const stories = await getStories();
+  return stories.find((s) => s.id === id);
 }
 
-export function upsertStory(story: TrackedStory) {
-  const stories = getStories();
+export async function upsertStory(story: TrackedStory) {
+  const stories = await getStories();
   const idx = stories.findIndex((s) => s.id === story.id);
   if (idx >= 0) {
     stories[idx] = story;
   } else {
     stories.unshift(story);
   }
-  saveStories(stories);
+  await saveStories(stories);
 }
 
-export function deleteStory(id: string) {
-  saveStories(getStories().filter((s) => s.id !== id));
-  const tlFile = path.join(TIMELINES_DIR, `${id}.json`);
-  if (fs.existsSync(tlFile)) fs.unlinkSync(tlFile);
+export async function deleteStory(id: string) {
+  await saveStories((await getStories()).filter((s) => s.id !== id));
+  await redis.del(timelineKey(id));
 }
 
 // --- Timelines ---
 
-export function getTimeline(storyId: string): TimelineEntry[] {
-  ensureDirs();
-  const file = path.join(TIMELINES_DIR, `${storyId}.json`);
-  if (!fs.existsSync(file)) return [];
-  return JSON.parse(fs.readFileSync(file, "utf-8"));
+export async function getTimeline(storyId: string): Promise<TimelineEntry[]> {
+  const data = await redis.get<TimelineEntry[]>(timelineKey(storyId));
+  return data || [];
 }
 
-export function saveTimeline(storyId: string, entries: TimelineEntry[]) {
-  ensureDirs();
-  const file = path.join(TIMELINES_DIR, `${storyId}.json`);
-  fs.writeFileSync(file, JSON.stringify(entries, null, 2));
+export async function saveTimeline(storyId: string, entries: TimelineEntry[]) {
+  await redis.set(timelineKey(storyId), entries);
 }
 
-export function addTimelineEntry(storyId: string, entry: TimelineEntry) {
-  const entries = getTimeline(storyId);
+export async function addTimelineEntry(
+  storyId: string,
+  entry: TimelineEntry
+): Promise<TimelineEntry[]> {
+  const entries = await getTimeline(storyId);
   entries.unshift(entry);
-  saveTimeline(storyId, entries);
+  await saveTimeline(storyId, entries);
   return entries;
 }
 
 // --- Known URLs ---
 
-export function getKnownUrls(storyId: string): Set<string> {
-  const entries = getTimeline(storyId);
+export async function getKnownUrls(storyId: string): Promise<Set<string>> {
+  const entries = await getTimeline(storyId);
   const urls = new Set<string>();
   entries.forEach((e) => e.sources.forEach((s) => urls.add(s.url)));
   return urls;

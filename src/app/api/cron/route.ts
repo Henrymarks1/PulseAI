@@ -43,7 +43,7 @@ function buildPriorContext(timeline: TimelineEntry[]): string {
 }
 
 async function updateStory(storyId: string, storyTitle: string) {
-  const timeline = getTimeline(storyId);
+  const timeline = await getTimeline(storyId);
   const threeHoursAgo = new Date(
     Date.now() - 3 * 60 * 60 * 1000
   ).toISOString();
@@ -116,7 +116,7 @@ Respond with valid JSON only, no other text. The JSON must have these fields:
       summary: "No new developments found since the last check.",
       sources: [],
     };
-    addTimelineEntry(storyId, entry);
+    await addTimelineEntry(storyId, entry);
     return { storyId, updated: false };
   }
 
@@ -127,7 +127,7 @@ Respond with valid JSON only, no other text. The JSON must have these fields:
     summary: parsed.summary,
     sources: parsed.sources,
   };
-  addTimelineEntry(storyId, entry);
+  await addTimelineEntry(storyId, entry);
 
   return { storyId, updated: true, headline: parsed.headline };
 }
@@ -137,7 +137,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const stories = getStories();
+  const stories = await getStories();
   if (stories.length === 0) {
     return NextResponse.json({ message: "No stories to update" });
   }
@@ -157,7 +157,7 @@ export async function GET(req: NextRequest) {
   for (const story of due) {
     try {
       const result = await updateStory(story.id, story.title);
-      upsertStory({ ...story, lastUpdated: new Date().toISOString() });
+      await upsertStory({ ...story, lastUpdated: new Date().toISOString() });
       results.push(result);
     } catch (err) {
       console.error(`Failed to update story ${story.id}:`, err);
