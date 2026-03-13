@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import Exa from "exa-js";
+import { generateText, stepCountIs } from "ai";
+import { openai } from "@ai-sdk/openai";
+import { webSearch } from "@exalabs/ai-sdk";
 import {
   getStories,
   upsertStory,
@@ -7,47 +9,21 @@ import {
   addTimelineEntry,
 } from "@/lib/store";
 import { TimelineEntry } from "@/lib/types";
+import { z } from "zod";
 
-const exa = new Exa(process.env.EXA_API_KEY);
-
-const UPDATE_SCHEMA = {
-  type: "object",
-  properties: {
-    headline: {
-      type: "string",
-      description:
-        "A specific, concrete headline for the single most important new development",
-    },
-    summary: {
-      type: "string",
-      description:
-        "Brief 2-3 paragraph update, each paragraph 2-3 sentences. Concise wire-service style. Separate paragraphs with double newlines.",
-    },
-    sources: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          title: { type: "string" },
-          url: { type: "string" },
-          publishedDate: { type: "string" },
-          isPrimary: {
-            type: "boolean",
-            description:
-              "True if first-hand/official source (government, military, wire service)",
-          },
-        },
-        required: ["title", "url"],
-      },
-    },
-    hasNewDevelopments: {
-      type: "boolean",
-      description:
-        "False if no genuinely new developments were found beyond what is already known",
-    },
-  },
-  required: ["headline", "summary", "sources", "hasNewDevelopments"],
-};
+const updateResponseSchema = z.object({
+  hasNewDevelopments: z.boolean(),
+  headline: z.string(),
+  summary: z.string(),
+  sources: z.array(
+    z.object({
+      title: z.string(),
+      url: z.string(),
+      publishedDate: z.string().optional(),
+      isPrimary: z.boolean().optional(),
+    })
+  ),
+});
 
 function isAuthorized(req: NextRequest): boolean {
   const secret = req.nextUrl.searchParams.get("secret");
@@ -63,52 +39,74 @@ function buildPriorContext(timeline: TimelineEntry[]): string {
   const context = recent
     .map((e) => `- ${e.headline}: ${e.summary.split("\n\n")[0]}`)
     .join("\n");
-  return `\n\nHere is what we already know and have reported. Do NOT repeat any of this information:\n${context}`;
+  return `\nHere is what we already know and have reported. Do NOT repeat any of this information:\n${context}`;
 }
 
 async function updateStory(storyId: string, storyTitle: string) {
   const timeline = getTimeline(storyId);
-  const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
-  const sinceReadable = new Date(threeHoursAgo).toLocaleString("en-US", {
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    timeZoneName: "short",
-  });
-
+  const threeHoursAgo = new Date(
+    Date.now() - 3 * 60 * 60 * 1000
+  ).toISOString();
   const priorContext = buildPriorContext(timeline);
 
-  const instructions = `You are a newsroom researcher. Find the SINGLE most important new development about: "${storyTitle}"
+  const systemPrompt = `You are a breaking news researcher for a newsroom. Your job is to find the SINGLE most important NEW development about a story.
 
-Only consider articles published after ${sinceReadable}. Ignore anything older.
+RULES:
+- Search for recent news using the web search tool. Search multiple times with different queries to be thorough.
+- Only report developments from the last 3 hours (after ${threeHoursAgo}).
+- Focus on ONE specific new event or development, not a roundup.
+- If you find nothing new beyond what's already known, say so.
 ${priorContext}
 
-Instructions:
-1. Search credible news sources for the most recent development NOT already listed above
-2. Write a SHORT 2-3 paragraph dispatch (each paragraph 2-3 sentences max). Be concise — this is a brief wire-service update, not a feature article
-3. Include key facts: who, what, where, when. One direct quote if available
-4. Do NOT include Wikipedia, explainers, or background pieces
-5. If there are no new developments beyond what is listed above, set hasNewDevelopments to false
-6. Do NOT embed URLs or source references in the summary text. Sources go in the sources field only.`;
+OUTPUT FORMAT:
+Respond with valid JSON only, no other text. The JSON must have these fields:
+- "hasNewDevelopments": boolean — false if nothing new was found
+- "headline": string — specific, concrete headline
+- "summary": string — 2-3 short paragraphs (2-3 sentences each), separated by \\n\\n. Wire-service style. No URLs or citations in the text.
+- "sources": array of objects with "title", "url", and optionally "publishedDate" and "isPrimary"`;
 
-  const task = await exa.research.create({
-    instructions,
-    model: "exa-research-fast",
-    outputSchema: UPDATE_SCHEMA,
+  const { text, steps } = await generateText({
+    model: openai("gpt-5.4"),
+    system: systemPrompt,
+    prompt: `Find the latest development about: "${storyTitle}"`,
+    tools: {
+      webSearch: webSearch({
+        numResults: 5,
+        startPublishedDate: threeHoursAgo,
+        category: "news",
+      }),
+    },
+    stopWhen: stepCountIs(5),
+    onStepFinish(event) {
+      const step = event as Record<string, unknown>;
+      console.log(`[Pulse Cron] Step ${step.stepNumber} for "${storyTitle}"`);
+      const toolCalls = step.toolCalls as
+        | { toolName: string; input?: Record<string, unknown> }[]
+        | undefined;
+      if (toolCalls?.length) {
+        for (const call of toolCalls) {
+          console.log(
+            `[Pulse Cron]   Tool: ${call.toolName}`,
+            (call.input as Record<string, string>)?.query || ""
+          );
+        }
+      }
+      if (step.text) {
+        console.log(
+          `[Pulse Cron]   Response: ${(step.text as string).slice(0, 200)}...`
+        );
+      }
+    },
   });
 
-  const result = await exa.research.pollUntilFinished(task.researchId, {
-    pollInterval: 2000,
-    timeoutMs: 300000,
-  });
+  console.log(`[Pulse Cron] "${storyTitle}" completed in ${steps.length} steps`);
 
-  if (result.status !== "completed" || !result.output) {
-    return { storyId, updated: false, error: `Research ${result.status}` };
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    return { storyId, updated: false, error: "Agent did not return valid JSON" };
   }
 
-  const parsed = result.output.parsed || JSON.parse(result.output.content);
+  const parsed = updateResponseSchema.parse(JSON.parse(jsonMatch[0]));
 
   if (!parsed.hasNewDevelopments) {
     const entry: TimelineEntry = {

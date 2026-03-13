@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import Exa from "exa-js";
+import { generateText, stepCountIs } from "ai";
+import { openai } from "@ai-sdk/openai";
+import { webSearch } from "@exalabs/ai-sdk";
 import {
   getStory,
   upsertStory,
@@ -7,47 +10,9 @@ import {
   addTimelineEntry,
 } from "@/lib/store";
 import { TimelineEntry } from "@/lib/types";
+import { z } from "zod";
 
 const exa = new Exa(process.env.EXA_API_KEY);
-
-const UPDATE_SCHEMA = {
-  type: "object",
-  properties: {
-    headline: {
-      type: "string",
-      description:
-        "A specific, concrete headline for the single most important new development",
-    },
-    summary: {
-      type: "string",
-      description:
-        "Brief 2-3 paragraph update, each paragraph 2-3 sentences. Concise wire-service style. Separate paragraphs with double newlines.",
-    },
-    sources: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          title: { type: "string" },
-          url: { type: "string" },
-          publishedDate: { type: "string" },
-          isPrimary: {
-            type: "boolean",
-            description:
-              "True if first-hand/official source (government, military, wire service)",
-          },
-        },
-        required: ["title", "url"],
-      },
-    },
-    hasNewDevelopments: {
-      type: "boolean",
-      description:
-        "False if no genuinely new developments were found beyond what is already known",
-    },
-  },
-  required: ["headline", "summary", "sources", "hasNewDevelopments"],
-};
 
 const INITIAL_SCHEMA = {
   type: "object",
@@ -93,12 +58,135 @@ function buildPriorContext(timeline: TimelineEntry[]): string {
     .map((e) => `- ${e.headline}: ${e.summary.split("\n\n")[0]}`)
     .join("\n");
 
-  return `\n\nHere is what we already know and have reported. Do NOT repeat any of this information:\n${context}`;
+  return `\nHere is what we already know and have reported. Do NOT repeat any of this information:\n${context}`;
+}
+
+const updateResponseSchema = z.object({
+  hasNewDevelopments: z
+    .boolean()
+    .describe("False if no genuinely new developments were found"),
+  headline: z
+    .string()
+    .describe("A specific, concrete headline for the new development"),
+  summary: z
+    .string()
+    .describe(
+      "Brief 2-3 paragraph update, each paragraph 2-3 sentences. Concise wire-service style. Separate paragraphs with double newlines."
+    ),
+  sources: z.array(
+    z.object({
+      title: z.string(),
+      url: z.string(),
+      publishedDate: z.string().optional(),
+      isPrimary: z.boolean().optional(),
+    })
+  ),
+});
+
+async function runAgentUpdate(
+  storyTitle: string,
+  timeline: TimelineEntry[]
+): Promise<z.infer<typeof updateResponseSchema>> {
+  const threeHoursAgo = new Date(
+    Date.now() - 3 * 60 * 60 * 1000
+  ).toISOString();
+  const priorContext = buildPriorContext(timeline);
+
+  const systemPrompt = `You are a breaking news researcher for a newsroom. Your job is to find the SINGLE most important NEW development about a story.
+
+RULES:
+- Search for recent news using the web search tool. Search multiple times with different queries to be thorough.
+- Only report developments from the last 3 hours (after ${threeHoursAgo}).
+- Focus on ONE specific new event or development, not a roundup.
+- If you find nothing new beyond what's already known, say so.
+${priorContext}
+
+OUTPUT FORMAT:
+Respond with valid JSON only, no other text. The JSON must have these fields:
+- "hasNewDevelopments": boolean — false if nothing new was found
+- "headline": string — specific, concrete headline (e.g. "Pentagon confirms second wave of strikes on Iranian air defenses")
+- "summary": string — 2-3 short paragraphs (2-3 sentences each), separated by \\n\\n. Wire-service style. No URLs or citations in the text.
+- "sources": array of objects with "title", "url", and optionally "publishedDate" and "isPrimary" (true for government/military/wire service sources)`;
+
+  const { text, steps } = await generateText({
+    model: openai("gpt-5.4"),
+    system: systemPrompt,
+    prompt: `Find the latest development about: "${storyTitle}"`,
+    tools: {
+      webSearch: webSearch({
+        numResults: 5,
+        startPublishedDate: threeHoursAgo,
+        category: "news",
+      }),
+    },
+    stopWhen: stepCountIs(5),
+    onStepFinish(event) {
+      const step = event as Record<string, unknown>;
+      console.log(`[Pulse Agent] Step ${step.stepNumber}`);
+      const toolCalls = step.toolCalls as
+        | { toolName: string; input?: Record<string, unknown> }[]
+        | undefined;
+      if (toolCalls?.length) {
+        for (const call of toolCalls) {
+          console.log(
+            `[Pulse Agent]   Tool: ${call.toolName}`,
+            (call.input as Record<string, string>)?.query || ""
+          );
+        }
+      }
+      const content = step.content as
+        | { type: string; toolName?: string; result?: unknown }[]
+        | undefined;
+      if (content) {
+        for (const part of content) {
+          if (part.type === "tool-result") {
+            if ((part as Record<string, unknown>).isError) {
+              console.error(
+                `[Pulse Agent]   Tool ERROR:`,
+                JSON.stringify(part.result, null, 2)
+              );
+            } else if (part.result) {
+              const r = part.result as {
+                results?: { title: string; url: string }[];
+              };
+              if (r?.results) {
+                console.log(
+                  `[Pulse Agent]   Found ${r.results.length} results:`
+                );
+                r.results.forEach((s) =>
+                  console.log(`[Pulse Agent]     - ${s.title}`)
+                );
+              }
+            }
+          }
+        }
+      }
+      if (step.text) {
+        console.log(
+          `[Pulse Agent]   Response: ${(step.text as string).slice(0, 200)}...`
+        );
+      }
+      if (!toolCalls?.length && !step.text) {
+        console.log(`[Pulse Agent]   Raw step:`, JSON.stringify(step, null, 2).slice(0, 500));
+      }
+    },
+  });
+
+  console.log(`[Pulse Agent] Completed in ${steps.length} steps`);
+
+  // Parse the JSON response
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    throw new Error("Agent did not return valid JSON");
+  }
+
+  const parsed = JSON.parse(jsonMatch[0]);
+  return updateResponseSchema.parse(parsed);
 }
 
 export async function POST(
   _req: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
 
@@ -111,102 +199,67 @@ export async function POST(
     const timeline = getTimeline(id);
     const isInitial = timeline.length === 0;
 
-    let instructions: string;
-    let schema: Record<string, unknown>;
-
-    if (isInitial) {
-      instructions = `You are a newsroom researcher. Research the current state of this story: "${story.title}"
-
-Write a concise single-paragraph summary (about 6 sentences) of where this story stands right now. Cover what happened, the key developments, major players, and current status.
-
-Use a wide range of sources: major newspapers (NYT, WSJ, Washington Post), wire services (AP, Reuters, AFP), broadcasters (CNN, BBC, Al Jazeera), government/official sources, and any other credible news outlets. Do not limit yourself to only government or military sources.
-Do NOT embed citations, URLs, or source references in the summary text. No inline links, no [Source](url) patterns. The sources field is separate. The summary should read as clean prose.`;
-      schema = INITIAL_SCHEMA;
-    } else {
-      const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
-      const sinceReadable = new Date(threeHoursAgo).toLocaleString("en-US", {
-        month: "long",
-        day: "numeric",
-        year: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-        timeZoneName: "short",
-      });
-
-      const priorContext = buildPriorContext(timeline);
-
-      instructions = `You are a newsroom researcher. Find the SINGLE most important new development about: "${story.title}"
-
-Only consider articles published after ${sinceReadable}. Ignore anything older.
-${priorContext}
-
-Instructions:
-1. Search credible news sources for the most recent development NOT already listed above
-2. Write a SHORT 2-3 paragraph dispatch (each paragraph 2-3 sentences max). Be concise — this is a brief wire-service update, not a feature article
-3. Include key facts: who, what, where, when. One direct quote if available
-4. Do NOT include Wikipedia, explainers, or background pieces
-5. If there are no new developments beyond what is listed above, set hasNewDevelopments to false
-6. Do NOT embed URLs or source references in the summary text. Sources go in the sources field only.`;
-      schema = UPDATE_SCHEMA;
-    }
-
-    // Try fast model first for updates, fall back to standard if it fails
-    let result;
-    const models = ["exa-research" as const];
-
-    for (const model of models) {
-      try {
-        console.log(`[Pulse] Starting research with model: ${model}`);
-        const task = await exa.research.create({
-          instructions,
-          model,
-          outputSchema: schema,
-        });
-        console.log("[Pulse] Research task created: ", task);
-        result = await exa.research.pollUntilFinished(task.researchId, {
-          pollInterval: 2000,
-          timeoutMs: 300000,
-        });
-        if (result.status === "completed") break;
-      } catch (err) {
-        console.error(`[Pulse] Model ${model} failed:`, err);
-        if (model === models[models.length - 1]) throw err;
-        console.log(`[Pulse] Falling back to next model...`);
-      }
-    }
-
-    if (!result || result.status !== "completed" || !result.output) {
-      return NextResponse.json({ error: `Research failed` }, { status: 500 });
-    }
-
-    const parsed = result.output.parsed || JSON.parse(result.output.content);
-
     let entry: TimelineEntry;
 
     if (isInitial) {
+      // Use Exa Research agent for the initial summary
+      const instructions = `You are a newsroom researcher. Research the current state of this story: "${story.title}"
+
+Write a concise single-paragraph summary (about 6 sentences) of where this story stands right now. Cover what happened, the key developments, major players, and current status.
+
+Use a wide range of sources: major newspapers (NYT, WSJ, Washington Post), wire services (AP, Reuters, AFP), broadcasters (CNN, BBC, Al Jazeera), government/official sources, and any other credible news outlets.
+Do NOT embed citations, URLs, or source references in the summary text. The sources field is separate.`;
+
+      console.log("[Pulse] Running Exa Research for initial summary");
+      const task = await exa.research.create({
+        instructions,
+        model: "exa-research",
+        outputSchema: INITIAL_SCHEMA,
+      });
+      const result = await exa.research.pollUntilFinished(task.researchId, {
+        pollInterval: 2000,
+        timeoutMs: 300000,
+      });
+
+      if (!result || result.status !== "completed" || !result.output) {
+        return NextResponse.json(
+          { error: "Research failed" },
+          { status: 500 }
+        );
+      }
+
+      const parsed =
+        result.output.parsed || JSON.parse(result.output.content);
+
       entry = {
         id: Date.now().toString(36),
         timestamp: new Date().toISOString(),
         headline: parsed.headline,
         summary: parsed.summary,
         sources: parsed.sources,
-      };
-    } else if (!parsed.hasNewDevelopments) {
-      entry = {
-        id: Date.now().toString(36),
-        timestamp: new Date().toISOString(),
-        headline: "No new developments",
-        summary: "No new developments found since the last check.",
-        sources: [],
       };
     } else {
-      entry = {
-        id: Date.now().toString(36),
-        timestamp: new Date().toISOString(),
-        headline: parsed.headline,
-        summary: parsed.summary,
-        sources: parsed.sources,
-      };
+      // Use custom GPT-5.4 agent with Exa web search for updates
+      console.log("[Pulse] Running GPT-5.4 agent for update");
+      const parsed = await runAgentUpdate(story.title, timeline);
+
+      if (!parsed.hasNewDevelopments) {
+        entry = {
+          id: Date.now().toString(36),
+          timestamp: new Date().toISOString(),
+          headline: "No new developments",
+          summary: "No new developments found since the last check.",
+          sources: [],
+        };
+      } else {
+        entry = {
+          id: Date.now().toString(36),
+          timestamp: new Date().toISOString(),
+          headline: parsed.headline,
+          summary: parsed.summary,
+          sources: parsed.sources,
+        };
+      }
     }
 
     addTimelineEntry(id, entry);
