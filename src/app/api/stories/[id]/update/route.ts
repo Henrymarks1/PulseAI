@@ -21,7 +21,7 @@ const UPDATE_SCHEMA = {
     summary: {
       type: "string",
       description:
-        "2-4 paragraph wire-service style dispatch. Include names, places, numbers, direct quotes. Attribute to sources. Separate paragraphs with double newlines.",
+        "Brief 2-3 paragraph update, each paragraph 2-3 sentences. Concise wire-service style. Separate paragraphs with double newlines.",
     },
     sources: {
       type: "array",
@@ -85,7 +85,10 @@ const INITIAL_SCHEMA = {
 function buildPriorContext(timeline: TimelineEntry[]): string {
   if (timeline.length === 0) return "";
 
-  const recent = timeline.slice(0, 10);
+  const recent = timeline
+    .filter((e) => e.headline !== "No new developments")
+    .slice(0, 10);
+  if (recent.length === 0) return "";
   const context = recent
     .map((e) => `- ${e.headline}: ${e.summary.split("\n\n")[0]}`)
     .join("\n");
@@ -120,8 +123,8 @@ Use a wide range of sources: major newspapers (NYT, WSJ, Washington Post), wire 
 Do NOT embed citations, URLs, or source references in the summary text. No inline links, no [Source](url) patterns. The sources field is separate. The summary should read as clean prose.`;
       schema = INITIAL_SCHEMA;
     } else {
-      const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-      const sinceReadable = new Date(thirtyMinsAgo).toLocaleString("en-US", {
+      const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+      const sinceReadable = new Date(threeHoursAgo).toLocaleString("en-US", {
         month: "long",
         day: "numeric",
         year: "numeric",
@@ -134,17 +137,16 @@ Do NOT embed citations, URLs, or source references in the summary text. No inlin
 
       instructions = `You are a newsroom researcher. Find the SINGLE most important new development about: "${story.title}"
 
-CRITICAL: Only consider articles and events FIRST PUBLISHED within the last 30 minutes (after ${sinceReadable}). Nothing older. If an article was published more than 30 minutes ago, ignore it completely — even if you haven't seen it before.
+Only consider articles published after ${sinceReadable}. Ignore anything older.
 ${priorContext}
 
 Instructions:
-1. Search ALL credible news sources published in the LAST 30 MINUTES ONLY — major newspapers (NYT, WSJ, Washington Post, Guardian), wire services (AP, Reuters, AFP), broadcasters (CNN, BBC, Al Jazeera, Fox News), government/official sources, and any other credible outlets
-2. Identify the SINGLE most newsworthy NEW development that is NOT already covered above
-3. Extract the concrete facts: who, what, where, when, direct quotes
-4. Write it up as ONE wire-service dispatch (2-4 paragraphs)
-5. Do NOT include Wikipedia, general explainers, or background pieces
-6. If there are no genuinely new developments published in the last 30 minutes, set hasNewDevelopments to false
-7. IMPORTANT: Do NOT embed citations, URLs, or source references in the summary text. No inline links, no [Source](url) patterns, no bracketed references. The sources are provided separately in the sources field. The summary should read as clean prose.`;
+1. Search credible news sources for the most recent development NOT already listed above
+2. Write a SHORT 2-3 paragraph dispatch (each paragraph 2-3 sentences max). Be concise — this is a brief wire-service update, not a feature article
+3. Include key facts: who, what, where, when. One direct quote if available
+4. Do NOT include Wikipedia, explainers, or background pieces
+5. If there are no new developments beyond what is listed above, set hasNewDevelopments to false
+6. Do NOT embed URLs or source references in the summary text. Sources go in the sources field only.`;
       schema = UPDATE_SCHEMA;
     }
 
@@ -160,6 +162,7 @@ Instructions:
           model,
           outputSchema: schema,
         });
+        console.log("[Pulse] Research task created: ", task);
         result = await exa.research.pollUntilFinished(task.researchId, {
           pollInterval: 2000,
           timeoutMs: 300000,
