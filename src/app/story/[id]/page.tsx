@@ -137,8 +137,32 @@ export default function StoryDashboard() {
 
   if (!story) {
     return (
-      <div className="max-w-3xl mx-auto px-4 py-12 text-center text-pulse-gray">
-        <p>Loading...</p>
+      <div className="max-w-3xl mx-auto px-4 py-8">
+        <div className="mb-8">
+          <div className="h-4 w-24 bg-pulse-border/60 rounded animate-pulse mb-4" />
+          <div className="flex items-start justify-between gap-4 mt-4">
+            <div className="flex-1">
+              <div className="h-9 w-80 bg-pulse-border/60 rounded animate-pulse mb-2" />
+              <div className="h-4 w-48 bg-pulse-border/40 rounded animate-pulse" />
+            </div>
+            <div className="h-8 w-32 bg-pulse-border/40 rounded animate-pulse" />
+          </div>
+        </div>
+        <div className="h-10 w-40 bg-pulse-border/60 rounded-lg animate-pulse mb-8" />
+        <div className="space-y-8">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="pl-8 relative">
+              <div className="absolute left-0 top-1.5 w-[15px] h-[15px] rounded-full bg-pulse-border/60 animate-pulse" />
+              <div className="h-4 w-20 bg-pulse-border/60 rounded animate-pulse mb-2" />
+              <div className="h-6 w-72 bg-pulse-border/60 rounded animate-pulse mb-3" />
+              <div className="space-y-2">
+                <div className="h-4 w-full bg-pulse-border/40 rounded animate-pulse" />
+                <div className="h-4 w-5/6 bg-pulse-border/40 rounded animate-pulse" />
+                <div className="h-4 w-4/6 bg-pulse-border/40 rounded animate-pulse" />
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     );
   }
@@ -204,8 +228,20 @@ export default function StoryDashboard() {
         )}
 
         {loading && timeline.length === 0 && (
-          <div className="py-8 text-center text-pulse-gray text-sm">
-            AI researcher is finding initial coverage...
+          <div className="space-y-8">
+            {[1, 2].map((i) => (
+              <div key={i} className="pl-8 relative">
+                <div className="absolute left-0 top-1.5 w-[15px] h-[15px] rounded-full bg-pulse-border/60 animate-pulse" />
+                <div className="h-4 w-20 bg-pulse-border/60 rounded animate-pulse mb-2" />
+                <div className="h-6 w-72 bg-pulse-border/60 rounded animate-pulse mb-3" />
+                <div className="space-y-2">
+                  <div className="h-4 w-full bg-pulse-border/40 rounded animate-pulse" />
+                  <div className="h-4 w-5/6 bg-pulse-border/40 rounded animate-pulse" />
+                  <div className="h-4 w-4/6 bg-pulse-border/40 rounded animate-pulse" />
+                  <div className="h-4 w-3/4 bg-pulse-border/40 rounded animate-pulse" />
+                </div>
+              </div>
+            ))}
           </div>
         )}
 

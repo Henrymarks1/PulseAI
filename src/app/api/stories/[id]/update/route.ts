@@ -24,7 +24,7 @@ const INITIAL_SCHEMA = {
     summary: {
       type: "string",
       description:
-        "A fact-rich bullet-point briefing for journalists. Each bullet starts with '• ' and states one specific, verifiable fact (who, what, where, when, numbers/figures). Include 6-10 bullets covering key events, major players, and current status. Separate bullets with newlines. No narrative prose — just the facts.",
+        "A fact-rich bullet-point briefing for journalists. Each bullet starts with a bullet character and states one specific, verifiable fact (who, what, where, when, numbers/figures). Include 6-10 bullets covering key events, major players, and current status. Separate bullets with newlines. No narrative prose, just the facts.",
     },
     sources: {
       type: "array",
@@ -227,25 +227,89 @@ Use a wide range of sources: major newspapers (NYT, WSJ, Washington Post), wire 
 Do NOT embed citations, URLs, or source references in the summary text. The sources field is separate.`;
 
       console.log("[Pulse] Running Exa Research for initial summary");
-      const task = await exa.research.create({
-        instructions,
-        model: "exa-research",
-        outputSchema: INITIAL_SCHEMA,
-      });
-      const result = await exa.research.pollUntilFinished(task.researchId, {
-        pollInterval: 2000,
-        timeoutMs: 300000,
+
+      // NOTE: We call the Exa Research API directly here instead of using
+      // exa.research.create() from the exa-js SDK. Inside Next.js 16 API
+      // routes, the SDK's fetch calls to /research/v1 consistently fail
+      // with ECONNRESET / "other side closed" socket errors. This is
+      // because Next.js patches global.fetch for caching/revalidation,
+      // and the SDK picks up that patched fetch (since global.fetch exists,
+      // it skips its cross-fetch fallback). The patched fetch's connection
+      // handling conflicts with the research endpoint.
+      //
+      // The SDK works fine in standalone Node scripts — the issue is
+      // specifically the Next.js fetch wrapper. Calling fetch directly
+      // with cache: "no-store" bypasses the caching layer and works
+      // reliably. curl and the Exa API itself are not the problem.
+      const EXA_API_KEY = process.env.EXA_API_KEY!;
+      const EXA_BASE = "https://api.exa.ai";
+
+      // Create research task
+      const createRes = await fetch(`${EXA_BASE}/research/v1`, {
+        method: "POST",
+        headers: {
+          "x-api-key": EXA_API_KEY,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          instructions,
+          model: "exa-research",
+          outputSchema: INITIAL_SCHEMA,
+        }),
+        // @ts-expect-error -- Next.js extends fetch with cache/revalidate options
+        cache: "no-store",
       });
 
-      if (!result || result.status !== "completed" || !result.output) {
+      if (!createRes.ok) {
+        const errBody = await createRes.text();
+        console.error(`[Pulse] Research create failed (${createRes.status}):`, errBody);
+        throw new Error(`Exa Research create failed: ${createRes.status}`);
+      }
+
+      const task = await createRes.json();
+      console.log(`[Pulse] Research task created: ${task.researchId}`);
+
+      // Poll until finished
+      let result = null;
+      const pollStart = Date.now();
+      const timeoutMs = 300000; // 5 min
+      while (Date.now() - pollStart < timeoutMs) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const pollRes = await fetch(
+          `${EXA_BASE}/research/v1/${task.researchId}`,
+          {
+            headers: { "x-api-key": EXA_API_KEY },
+            // @ts-expect-error -- Next.js extends fetch
+            cache: "no-store",
+          }
+        );
+        if (!pollRes.ok) {
+          console.warn(`[Pulse] Poll returned ${pollRes.status}, retrying...`);
+          continue;
+        }
+        const data = await pollRes.json();
+        console.log(`[Pulse] Research status: ${data.status}`);
+        if (data.status === "completed" && data.output) {
+          result = data;
+          break;
+        }
+        if (data.status === "failed" || data.status === "canceled") {
+          console.error(`[Pulse] Research ${data.status}:`, data.error);
+          break;
+        }
+      }
+
+      if (!result || !result.output) {
         return NextResponse.json(
-          { error: "Research failed" },
+          { error: "Research timed out or failed" },
           { status: 500 }
         );
       }
 
       const parsed =
-        result.output.parsed || JSON.parse(result.output.content);
+        typeof result.output.parsed === "object"
+          ? result.output.parsed
+          : JSON.parse(result.output.content);
 
       entry = {
         id: Date.now().toString(36),

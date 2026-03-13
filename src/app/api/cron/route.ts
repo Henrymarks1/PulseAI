@@ -26,6 +26,10 @@ const updateResponseSchema = z.object({
 });
 
 function isAuthorized(req: NextRequest): boolean {
+  // Vercel cron sends Authorization: Bearer <CRON_SECRET>
+  const authHeader = req.headers.get("authorization");
+  if (authHeader === `Bearer ${process.env.CRON_SECRET}`) return true;
+  // Also allow ?secret= for manual invocations
   const secret = req.nextUrl.searchParams.get("secret");
   return secret === process.env.CRON_SECRET;
 }

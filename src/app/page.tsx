@@ -7,11 +7,13 @@ import { TrackedStory } from "@/lib/types";
 export default function Home() {
   const [stories, setStories] = useState<TrackedStory[]>([]);
   const [input, setInput] = useState("");
+  const [storiesLoaded, setStoriesLoaded] = useState(false);
 
   const fetchStories = async () => {
     const res = await fetch("/api/stories");
     const data = await res.json();
     setStories(data.stories || []);
+    setStoriesLoaded(true);
   };
 
   useEffect(() => {
@@ -66,7 +68,20 @@ export default function Home() {
         </div>
       </form>
 
-      {stories.length === 0 ? (
+      {!storiesLoaded ? (
+        <div className="space-y-4">
+          {[1, 2, 3].map((i) => (
+            <div
+              key={i}
+              className="bg-white border border-pulse-border rounded-lg p-5"
+            >
+              <div className="h-6 w-64 bg-pulse-border/60 rounded animate-pulse mb-2" />
+              <div className="h-4 w-32 bg-pulse-border/40 rounded animate-pulse mb-2" />
+              <div className="h-3 w-44 bg-pulse-border/30 rounded animate-pulse" />
+            </div>
+          ))}
+        </div>
+      ) : stories.length === 0 ? (
         <div className="text-center py-16 text-pulse-gray">
           <p className="text-lg mb-1">No stories tracked yet</p>
           <p className="text-sm">
