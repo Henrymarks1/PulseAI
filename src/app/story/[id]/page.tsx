@@ -80,18 +80,40 @@ export default function StoryDashboard() {
     loadData();
   }, [loadData]);
 
+  const pollUntilComplete = useCallback(async () => {
+    // Poll loadData until timeline has entries or we time out
+    const start = Date.now();
+    const timeout = 5 * 60 * 1000; // 5 min
+    while (Date.now() - start < timeout) {
+      await new Promise((r) => setTimeout(r, 3000));
+      const res = await fetch(`/api/stories?id=${id}`);
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data.timeline && data.timeline.length > 0) {
+        setStory(data.story);
+        setTimeline(data.timeline);
+        return;
+      }
+    }
+  }, [id]);
+
   const checkForUpdates = useCallback(async () => {
     if (!story) return;
     setLoading(true);
     try {
-      await fetch(`/api/stories/${id}/update`, { method: "POST" });
-      await loadData();
+      const res = await fetch(`/api/stories/${id}/update`, { method: "POST" });
+      if (res.status === 409) {
+        // Another update is already in progress — poll until it finishes
+        await pollUntilComplete();
+      } else {
+        await loadData();
+      }
     } catch (err) {
       console.error("Fetch error:", err);
     } finally {
       setLoading(false);
     }
-  }, [story, id, loadData]);
+  }, [story, id, loadData, pollUntilComplete]);
 
   // Auto-fetch initial summary when story has no timeline yet
   const hasFetchedInitial = useRef(false);
